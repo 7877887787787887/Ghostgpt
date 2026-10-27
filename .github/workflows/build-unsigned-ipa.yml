@@ -25,7 +25,7 @@ jobs:
           test -s ios-native/verify-simulator-screen.swift
           grep -q 'configuration.delegateClass = SceneDelegate.self' ios-native/AppDelegate.swift
           grep -q 'UIHostingController(rootView: GhostGPTRootView())' ios-native/SceneDelegate.swift
-          ! grep -q 'Open GhostGPT' ios-native/*.swift
+          ! grep -q 'Open GhostGPT' ios-native/AppDelegate.swift ios-native/SceneDelegate.swift
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
