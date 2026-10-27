@@ -88,9 +88,13 @@ struct SettingsView: View {
         List {
             Section("Connection") {
                 Label("Native SwiftUI interface", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                Label("Cloudflare-ready deployment", systemImage: "cloud.fill").foregroundStyle(.blue)
                 Label("Service API not configured", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             }
             Section("Preferences") { Toggle("Notifications", isOn: $notificationsEnabled) }
+            Section("Advanced") {
+                NavigationLink("Advanced Settings") { AdvancedSettingsView() }
+            }
             Section("Policies") {
                 Text("Privacy Policy")
                 Text("Terms of Use")
@@ -98,5 +102,30 @@ struct SettingsView: View {
             }
             Section { Text("GhostGPT native iOS • 1.0").foregroundStyle(.secondary) }
         }.navigationTitle("Settings")
+    }
+}
+
+struct AdvancedSettingsView: View {
+    @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt.live"
+    @AppStorage("cloudflareEnabled") private var cloudflareEnabled = true
+    @AppStorage("debugLogging") private var debugLogging = false
+    var body: some View {
+        Form {
+            Section("Service") {
+                TextField("Service URL", text: $serviceURL)
+                    .textInputAutocapitalization(.never).keyboardType(.URL)
+                Toggle("Use Cloudflare edge connection", isOn: $cloudflareEnabled)
+            }
+            Section("Diagnostics") {
+                Toggle("Debug logging", isOn: $debugLogging)
+                Button("Reset connection settings", role: .destructive) {
+                    serviceURL = "https://ghostgpt.live"; cloudflareEnabled = true; debugLogging = false
+                }
+            }
+            Section("Safety") {
+                Text("Never store API keys, passwords, or private tokens in this app. Keep secrets on a protected server or Cloudflare Worker.")
+                    .foregroundStyle(.secondary)
+            }
+        }.navigationTitle("Advanced Settings")
     }
 }
