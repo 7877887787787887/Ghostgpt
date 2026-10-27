@@ -18,8 +18,8 @@ print(visibleText)
 guard visibleText.localizedCaseInsensitiveContains("GhostGPT") else {
     fatalError("Native GhostGPT screen was not visible at launch")
 }
-guard visibleText.localizedCaseInsensitiveContains("Native iOS workspace") else {
-    fatalError("Expected native SwiftUI home screen was not visible")
+guard visibleText.localizedCaseInsensitiveContains("Your private AI workspace") else {
+    fatalError("Expected native SwiftUI chat home screen was not visible")
 }
 guard !visibleText.localizedCaseInsensitiveContains("Open GhostGPT") else {
     fatalError("Legacy web launch screen is still visible")
