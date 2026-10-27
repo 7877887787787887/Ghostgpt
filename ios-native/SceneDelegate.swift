@@ -261,7 +261,9 @@ struct ChatView: View {
                     messages = session.messages
                     errorText = nil
                     showingHistory = false
-                }
+                },
+                onDelete: { id in deleteSavedChat(id) },
+                onClear: { savedChatsJSON = "[]" }
             )
         }
         .sheet(item: $activeTool) { tool in
@@ -295,6 +297,15 @@ struct ChatView: View {
                         .padding(.horizontal, 12).padding(.vertical, 10).background(.white.opacity(0.07), in: Capsule())
                 }
             }.padding(.horizontal, 3)
+        }
+    }
+
+    private func deleteSavedChat(_ id: UUID) {
+        guard let data = savedChatsJSON.data(using: .utf8) else { return }
+        var sessions = (try? JSONDecoder().decode([ChatSession].self, from: data)) ?? []
+        sessions.removeAll { $0.id == id }
+        if let encoded = try? JSONEncoder().encode(sessions) {
+            savedChatsJSON = String(data: encoded, encoding: .utf8) ?? "[]"
         }
     }
 
@@ -463,10 +474,22 @@ struct BrowserView: View {
     private func navigate() {
         let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if trimmed.contains(" ") || (!trimmed.contains(".") && !trimmed.hasPrefix("http")) {
-            currentURL = "https://www.google.com/search?q=" + (trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")
+        if trimmed.contains(where: { $0.isWhitespace }) || (!trimmed.contains(".") && !trimmed.contains("://")) {
+            var components = URLComponents(string: "https://www.google.com/search")
+            components?.queryItems = [URLQueryItem(name: "q", value: trimmed)]
+            guard let url = components?.url else { return }
+            currentURL = url.absoluteString
         } else {
-            currentURL = trimmed.contains("://") ? trimmed : "https://" + trimmed
+            let candidate = trimmed.contains("://") ? trimmed : "https://" + trimmed
+            guard let url = URL(string: candidate),
+                  ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
+                  url.host != nil else {
+                address = "Invalid URL — use a website address or search terms"
+                addressFocused = true
+                return
+            }
+            currentURL = url.absoluteString
+            address = url.absoluteString
         }
         addressFocused = false
     }
@@ -703,11 +726,20 @@ struct ChatHistorySheet: View {
     let savedChatsJSON: String
     let onNewChat: () -> Void
     let onSelect: (ChatSession) -> Void
+    let onDelete: (UUID) -> Void
+    let onClear: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var searchText = ""
+    @State private var confirmingClear = false
 
     private var sessions: [ChatSession] {
         guard let data = savedChatsJSON.data(using: .utf8) else { return [] }
-        return (try? JSONDecoder().decode([ChatSession].self, from: data)) ?? []
+        let all = (try? JSONDecoder().decode([ChatSession].self, from: data)) ?? []
+        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return all }
+        return all.filter {
+            $0.title.localizedCaseInsensitiveContains(searchText) ||
+            $0.messages.contains { $0.text.localizedCaseInsensitiveContains(searchText) }
+        }
     }
 
     var body: some View {
@@ -715,10 +747,15 @@ struct ChatHistorySheet: View {
             List {
                 Section {
                     Button(action: onNewChat) { Label("New chat", systemImage: "square.and.pencil") }
+                    if !sessions.isEmpty {
+                        Button(role: .destructive) { confirmingClear = true } label: {
+                            Label("Clear all saved chats", systemImage: "trash")
+                        }
+                    }
                 }
                 Section("Saved conversations") {
                     if sessions.isEmpty {
-                        Text("Your conversations will appear here automatically.")
+                        Text(searchText.isEmpty ? "Your conversations will appear here automatically." : "No conversations match your search.")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else {
                         ForEach(sessions) { session in
@@ -728,12 +765,26 @@ struct ChatHistorySheet: View {
                                     Text("\(session.messages.count) messages · \(session.updatedAt.formatted(date: .abbreviated, time: .shortened))")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }.frame(maxWidth: .infinity, alignment: .leading)
-                            }.buttonStyle(.plain)
+                            }
+                            .buttonStyle(.plain)
+                            .swipeActions {
+                                Button(role: .destructive) { onDelete(session.id) } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                         }
                     }
                 }
-            }.navigationTitle("Chats")
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            }
+            .searchable(text: $searchText, prompt: "Search chats and messages")
+            .navigationTitle("Chats")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .confirmationDialog("Delete all saved conversations?", isPresented: $confirmingClear, titleVisibility: .visible) {
+                Button("Delete all chats", role: .destructive) { onClear() }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("This permanently removes the locally saved chat list from this device.")
+            }
         }.presentationDetents([.medium, .large])
     }
 }
