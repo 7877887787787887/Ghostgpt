@@ -1233,7 +1233,7 @@ struct AgentWorkspaceView: View {
             \(goal)
             Return 3-8 numbered steps. For each step state the intended action, the tool or evidence needed, what result would count as success, and a recovery path if it fails. Mark steps requiring user approval. Do not claim to execute tools. Prefer read-only inspection before changes. Keep the plan concise.
             """
-            request.httpBody = try JSONSerialization.data(withJSONObject: ["message": instruction])
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["message": instruction, "messages": [["role": "user", "content": instruction]], "speed": "balanced", "tools": ["Browser", "MCP", "PowerShell", "SSH"]])
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw NSError(domain: "GhostGPTAgent", code: 2, userInfo: [NSLocalizedDescriptionKey: "No HTTP response from AI service."])
@@ -1242,7 +1242,7 @@ struct AgentWorkspaceView: View {
                 throw NSError(domain: "GhostGPTAgent", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "AI service returned HTTP \(http.statusCode)."])
             }
             let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let text = (object?["response"] as? String) ?? (object?["message"] as? String) ?? String(data: data, encoding: .utf8) ?? "Empty response."
+            let text = (object?["reply"] as? String) ?? (object?["response"] as? String) ?? (object?["message"] as? String) ?? String(data: data, encoding: .utf8) ?? "Empty response."
             plan = text
             status = "Plan received. No tools have been executed."
             runLog.insert("Created plan for goal: \(goal)", at: 0)
