@@ -64,8 +64,8 @@ struct ChatView: View {
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("speedMode") private var speedMode = "Balanced"
     @AppStorage("modelProvider") private var modelProvider = "Cloudflare"
-    @AppStorage("localModelEndpoint") private var localModelEndpoint = ""
-    @AppStorage("localModelID") private var localModelID = "deepseek-r1:14b"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
+    @AppStorage("localModelID") private var localModelID = "qwen3.5:9b"
     @AppStorage("localModelAPIKey") private var localModelAPIKey = ""
     @AppStorage("enabledToolsJSON") private var enabledToolsJSON = "[\"Browser\"]"
     @AppStorage("savedChatsJSON") private var savedChatsJSON = "[]"
@@ -495,7 +495,7 @@ struct PluginsView: View {
 
 struct TerminalGatewayView: View {
     let mode: String
-    @AppStorage("terminalGatewayURL") private var gatewayURL = ""
+    @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
     @AppStorage("terminalGatewayToken") private var gatewayToken = ""
     @State private var host = ""
     @State private var username = ""
@@ -575,7 +575,7 @@ struct TerminalGatewayView: View {
 }
 
 struct TerminalGatewaySettingsView: View {
-    @AppStorage("terminalGatewayURL") private var gatewayURL = ""
+    @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
     @AppStorage("terminalGatewayToken") private var gatewayToken = ""
     var body: some View {
         Form {
@@ -652,8 +652,8 @@ struct SettingsView: View {
 
 struct LocalModelsSettingsView: View {
     @AppStorage("modelProvider") private var modelProvider = "Cloudflare"
-    @AppStorage("localModelEndpoint") private var localModelEndpoint = ""
-    @AppStorage("localModelID") private var localModelID = "deepseek-r1:14b"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
+    @AppStorage("localModelID") private var localModelID = "qwen3.5:9b"
     @AppStorage("localModelAPIKey") private var localModelAPIKey = ""
     @State private var availableModels: [String] = []
     @State private var status = "Model inventory has not been checked."
