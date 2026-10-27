@@ -135,6 +135,11 @@ enum LocalModelClient {
             : endpoint
         let base = try validatedBaseURL(configuredEndpoint, provider: selectedProvider)
         let apiKey = KeychainStore.migratedValue(for: selectedProvider.keychainAccount)
+        if selectedProvider != .cloudflare && apiKey.isEmpty {
+            throw NSError(domain: "GhostGPT.ModelProvider", code: 11, userInfo: [
+                NSLocalizedDescriptionKey: "The PC gateway bearer token is required for (selectedProvider.rawValue). Enter it in Settings → AI models."
+            ])
+        }
         let selectedModelInput = model.trimmingCharacters(in: .whitespacesAndNewlines)
 
         switch selectedProvider {
@@ -1693,7 +1698,13 @@ struct LocalModelsSettingsView: View {
         loading = true
         defer { loading = false }
         do {
-            let token = KeychainStore.migratedValue(for: provider.keychainAccount)
+            let token = providerAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if provider != .cloudflare && token.isEmpty {
+                throw NSError(domain: "GhostGPT.ModelScan", code: 11, userInfo: [
+                    NSLocalizedDescriptionKey: "The PC gateway bearer token is required to scan (provider.rawValue) models."
+                ])
+            }
+            if !token.isEmpty { _ = KeychainStore.save(token, for: provider.keychainAccount) }
             var modelIDs: [String] = []
             if provider == .lmStudio {
                 var startRequest = URLRequest(url: base.appendingPathComponent("control/start"))

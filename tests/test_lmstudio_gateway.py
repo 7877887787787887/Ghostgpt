@@ -386,7 +386,8 @@ class GatewayAuthenticationTests(unittest.TestCase):
             'enum ModelProvider', 'case cloudflare = "Cloudflare"', 'case ollama = "Ollama"',
             'case lmStudio = "LM Studio"', 'cloudflareModelID', 'ollamaModelID', 'lmStudioModelID',
             'cloudflareAPIKey', 'KeychainStore.migratedValue(for: selectedProvider.keychainAccount)',
-            'api/tags', 'api/chat', 'v1/models', 'LocalModelClient.chat',
+            'selectedProvider != .cloudflare && apiKey.isEmpty',
+            'PC gateway bearer token is required', 'api/tags', 'api/chat', 'v1/models', 'LocalModelClient.chat',
         ):
             self.assertIn(required, source)
         self.assertIn('components.scheme?.lowercased() == "https"', source)

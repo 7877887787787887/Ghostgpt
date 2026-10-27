@@ -39,6 +39,7 @@ jobs:
           grep -q 'cloudflareModelID' ios-native/SceneDelegate.swift
           grep -q 'ollamaModelID' ios-native/SceneDelegate.swift
           grep -q 'lmStudioModelID' ios-native/SceneDelegate.swift
+          grep -q 'selectedProvider != .cloudflare && apiKey.isEmpty' ios-native/SceneDelegate.swift
           grep -q 'proxy_to_ollama' windows/lmstudio_gateway.py
           grep -q 'OLLAMA_PORT' windows/lmstudio_gateway.py
           grep -q 'URLSession.shared.data' ios-native/SceneDelegate.swift
