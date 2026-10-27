@@ -46,6 +46,13 @@ jobs:
       - name: Sync web assets and native plugins
         run: npx cap sync ios
 
+      - name: Install native SwiftUI interface
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ios-native/AppDelegate.swift
+          cp ios-native/AppDelegate.swift ios/App/App/AppDelegate.swift
+
       - name: Build without code signing
         shell: bash
         run: |
