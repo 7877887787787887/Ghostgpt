@@ -2,8 +2,7 @@ name: Build unsigned iOS IPA
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -16,6 +15,22 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+
+      - name: Validate launch screen before building
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s www/index.html
+          grep -q 'Open GhostGPT' www/index.html
+          grep -q 'ghostgpt.live/chat' www/index.html
+          for page in www/privacy.html www/terms.html www/acceptable-use.html; do
+            test -s "$page"
+            grep -qi '<!doctype html>' "$page"
+          done
+          if grep -q 'server:[[:space:]]*{[^}]*url:' capacitor.config.ts; then
+            echo 'Remote server.url is forbidden: it can cause a blank native screen.'
+            exit 1
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -35,32 +50,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          xcodebuild \
-            -project ios/App/App.xcodeproj \
-            -scheme App \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build/ios \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY='' \
-            build
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/ios CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
 
-      - name: Package unsigned IPA
+      - name: Package and verify unsigned IPA
         shell: bash
         run: |
           set -euo pipefail
           app_path="build/ios/Build/Products/Release-iphoneos/App.app"
           test -d "$app_path"
           if /usr/bin/codesign --verify --deep "$app_path" >/dev/null 2>&1; then
-            echo "Unexpected code signature found; refusing to label this artifact unsigned."
+            echo 'Unexpected code signature found; refusing to label this artifact unsigned.'
             exit 1
           fi
           mkdir -p dist/Payload
           /usr/bin/ditto "$app_path" dist/Payload/App.app
           cd dist
           /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload GhostGPT-unsigned.ipa
+          test -s GhostGPT-unsigned.ipa
+          /usr/bin/unzip -l GhostGPT-unsigned.ipa | grep -q 'Payload/App.app/'
+          /usr/bin/shasum -a 256 GhostGPT-unsigned.ipa
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
