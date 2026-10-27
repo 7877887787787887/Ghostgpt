@@ -314,6 +314,65 @@ class GatewayAuthenticationTests(unittest.TestCase):
         self.assertEqual(created[0].request_path, "/api/tags")
         self.assertNotIn("Authorization", created[0].forwarded_headers)
 
+    def test_ollama_chat_proxy_forwards_only_safe_headers_and_bounds_body(self):
+        body = b'{"model":"test-model","messages":[],"stream":false}'
+        handler = FakeHandler(
+            path="/api/chat",
+            method="POST",
+            headers={
+                "Authorization": "Bearer correct-test-token",
+                "Content-Type": "application/json",
+                "Content-Length": str(len(body)),
+            },
+            body=body,
+        )
+
+        class FakeResponse:
+            status = 200
+            def read(self): return b'{"message":{"content":"ok"}}'
+            def getheaders(self): return [("Content-Type", "application/json")]
+
+        class FakeConnection:
+            def __init__(self, host, port, timeout=None):
+                self.target = (host, port)
+                self.method = None
+                self.path = None
+                self.body = None
+                self.headers = None
+            def request(self, method, path, body=None, headers=None):
+                self.method, self.path, self.body, self.headers = method, path, body, headers or {}
+            def getresponse(self): return FakeResponse()
+            def close(self): pass
+
+        created = []
+        def connection_factory(host, port, timeout=None):
+            conn = FakeConnection(host, port, timeout)
+            created.append(conn)
+            return conn
+
+        with patch.object(gateway.http.client, "HTTPConnection", side_effect=connection_factory):
+            gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(created[0].target, (gateway.OLLAMA_HOST, gateway.OLLAMA_PORT))
+        self.assertEqual(created[0].method, "POST")
+        self.assertEqual(created[0].path, "/api/chat")
+        self.assertEqual(created[0].body, body)
+        self.assertEqual(created[0].headers.get("Content-Type"), "application/json")
+        self.assertNotIn("Authorization", created[0].headers)
+
+        oversized = FakeHandler(
+            path="/api/chat",
+            method="POST",
+            headers={
+                "Authorization": "Bearer correct-test-token",
+                "Content-Length": str(gateway.MAX_BODY_BYTES + 1),
+            },
+        )
+        with patch.object(gateway.http.client, "HTTPConnection") as upstream:
+            gateway.Handler.do_POST(oversized)
+        self.assertEqual(oversized.responses[0][0], 413)
+        upstream.assert_not_called()
+
     def test_ollama_proxy_rejects_unapproved_routes(self):
         handler = FakeHandler(path="/api/pull", headers={"Authorization": "Bearer correct-test-token"})
         with patch.object(gateway.http.client, "HTTPConnection") as upstream:
