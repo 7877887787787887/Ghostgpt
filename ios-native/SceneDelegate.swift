@@ -967,7 +967,7 @@ struct MCPConnectorView: View {
         request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue(protocolVersion, forHTTPHeaderField: "MCP-Protocol-Version")
         if let sessionID { request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id") }
-        if !bearerToken.isEmpty { request.setValue("Bearer \\(bearerToken)", forHTTPHeaderField: "Authorization") }
+        if !bearerToken.isEmpty { request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization") }
         request.timeoutInterval = 30
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "jsonrpc": "2.0", "id": id, "method": method, "params": params
@@ -978,7 +978,7 @@ struct MCPConnectorView: View {
             sessionID = returnedSession
         }
         guard (200..<300).contains(http.statusCode) else {
-            throw NSError(domain: "GhostGPT.MCP", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "MCP HTTP \\(http.statusCode): \\(String(data: data, encoding: .utf8) ?? "No response body")"])
+            throw NSError(domain: "GhostGPT.MCP", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "MCP HTTP \(http.statusCode): \(String(data: data, encoding: .utf8) ?? "No response body")"])
         }
         return (data, http)
     }
@@ -994,7 +994,7 @@ struct MCPConnectorView: View {
         request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue(protocolVersion, forHTTPHeaderField: "MCP-Protocol-Version")
         if let sessionID { request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id") }
-        if !bearerToken.isEmpty { request.setValue("Bearer \\(bearerToken)", forHTTPHeaderField: "Authorization") }
+        if !bearerToken.isEmpty { request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization") }
         request.timeoutInterval = 30
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "jsonrpc": "2.0", "method": "notifications/initialized", "params": [:] as [String: Any]
@@ -1002,7 +1002,7 @@ struct MCPConnectorView: View {
         let (_, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         guard (200..<300).contains(http.statusCode) else {
-            throw NSError(domain: "GhostGPT.MCP", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "MCP initialized notification returned HTTP \\(http.statusCode)."])
+            throw NSError(domain: "GhostGPT.MCP", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "MCP initialized notification returned HTTP \(http.statusCode)."])
         }
     }
 
@@ -1031,7 +1031,7 @@ struct MCPConnectorView: View {
             ], id: nextRequestID())
             let initObject = try decodeJSONRPC(initData)
             if let error = initObject["error"] {
-                throw NSError(domain: "GhostGPT.MCP", code: 3, userInfo: [NSLocalizedDescriptionKey: "Initialize failed: \\(error)"])
+                throw NSError(domain: "GhostGPT.MCP", code: 3, userInfo: [NSLocalizedDescriptionKey: "Initialize failed: \(error)"])
             }
             if let result = initObject["result"] as? [String: Any],
                let version = result["protocolVersion"] as? String { protocolVersion = version }
@@ -1046,7 +1046,7 @@ struct MCPConnectorView: View {
                 let (data, _) = try await makeRequest(method: "tools/list", params: params, id: nextRequestID())
                 let object = try decodeJSONRPC(data)
                 if let error = object["error"] {
-                    throw NSError(domain: "GhostGPT.MCP", code: 4, userInfo: [NSLocalizedDescriptionKey: "tools/list failed: \\(error)"])
+                    throw NSError(domain: "GhostGPT.MCP", code: 4, userInfo: [NSLocalizedDescriptionKey: "tools/list failed: \(error)"])
                 }
                 let result = object["result"] as? [String: Any] ?? [:]
                 let rawTools = result["tools"] as? [[String: Any]] ?? []
@@ -1064,10 +1064,10 @@ struct MCPConnectorView: View {
                 $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }
             selectedTool = tools.first?.name ?? ""
-            resultText = "Connected. Found \\(tools.count) tool(s). Protocol: \\(protocolVersion). Session: \\(sessionID == nil ? "stateless" : "maintained")."
+            resultText = "Connected. Found \(tools.count) tool(s). Protocol: \(protocolVersion). Session: \(sessionID == nil ? "stateless" : "maintained")."
         } catch {
             tools = []
-            resultText = "Connection failed: \\(error.localizedDescription)"
+            resultText = "Connection failed: \(error.localizedDescription)"
         }
     }
 
@@ -1093,7 +1093,7 @@ struct MCPConnectorView: View {
                 resultText = text
             } else { resultText = String(data: data, encoding: .utf8) ?? "Tool completed with an unreadable response." }
         } catch {
-            resultText = "Tool call failed: \\(error.localizedDescription)"
+            resultText = "Tool call failed: \(error.localizedDescription)"
         }
     }
 }
