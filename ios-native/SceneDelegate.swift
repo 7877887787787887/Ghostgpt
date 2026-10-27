@@ -129,6 +129,8 @@ struct ChatView: View {
     @AppStorage("modelProvider") private var modelProvider = "Cloudflare"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
     @AppStorage("localModelID") private var localModelID = "gps-qwen3-fast-8b:latest"
+    @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
+    @AppStorage("lmStudioModelID") private var lmStudioModelID = ""
     @AppStorage("enabledToolsJSON") private var enabledToolsJSON = "[\"Browser\"]"
     @AppStorage("savedChatsJSON") private var savedChatsJSON = "[]"
     @State private var draft = ""
@@ -304,6 +306,16 @@ struct ChatView: View {
         }
         .background(Color(uiColor: .systemBackground))
         .toolbar(.hidden, for: .navigationBar)
+        .onChange(of: modelProvider) { oldProvider, newProvider in
+            if oldProvider == "Ollama" { ollamaModelID = localModelID }
+            if oldProvider == "LM Studio" { lmStudioModelID = localModelID }
+            if newProvider == "Ollama" { localModelID = ollamaModelID }
+            if newProvider == "LM Studio" { localModelID = lmStudioModelID }
+        }
+        .onChange(of: localModelID) { _, newModelID in
+            if modelProvider == "Ollama" { ollamaModelID = newModelID }
+            if modelProvider == "LM Studio" { lmStudioModelID = newModelID }
+        }
         .onChange(of: messages.count) { _ in persistCurrentChat() }
         .sheet(isPresented: $showingHistory) {
             ChatHistorySheet(
@@ -409,13 +421,16 @@ struct ChatView: View {
                     request.httpMethod = "POST"
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.timeoutInterval = speedMode == "Fast" ? 25 : 75
-                    request.httpBody = try JSONSerialization.data(withJSONObject: [
+                    var payload: [String: Any] = [
                         "message": text,
                         "messages": history,
                         "speed": speedMode.lowercased(),
-                        "model": localModelID,
                         "tools": enabledTools
-                    ])
+                    ]
+                    if !localModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        payload["model"] = localModelID
+                    }
+                    request.httpBody = try JSONSerialization.data(withJSONObject: payload)
                     let (data, response) = try await URLSession.shared.data(for: request)
                     guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
                     if (200..<300).contains(http.statusCode), let answer = try? JSONDecoder().decode(AIReply.self, from: data) {
