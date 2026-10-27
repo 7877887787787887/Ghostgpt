@@ -1,34 +1,26 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#111827" />
-    <title>GhostGPT</title>
-    <style>
-      :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #111827; color: #f9fafb; }
-      main { max-width: 30rem; padding: 2rem; text-align: center; }
-      a { display:inline-block; margin-top:1rem; padding:.75rem 1rem; border-radius:.5rem; background:#2563eb; color:white; text-decoration:none; }
-      #status { color:#cbd5e1; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>GhostGPT</h1>
-      <p id="status">Opening GhostGPT…</p>
-      <a href="https://ghostgpt.live/chat/" rel="noopener">Open GhostGPT</a>
-    </main>
-    <script>
-      const target = 'https://ghostgpt.live/chat/';
-      const status = document.getElementById('status');
-      window.setTimeout(() => {
-        status.textContent = 'Connecting to the GhostGPT service…';
-        window.location.assign(target);
-      }, 250);
-      window.addEventListener('error', () => {
-        status.textContent = 'The GhostGPT service could not be opened. Check your connection and tap Open GhostGPT.';
-      });
-    </script>
-  </body>
-</html>
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1220"><meta name="description" content="GhostGPT mobile companion">
+<title>GhostGPT</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#eef4ff;background:#0b1220}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% 0,#172b55,#0b1220 58%);display:flex;align-items:center;justify-content:center;padding:env(safe-area-inset-top) 20px env(safe-area-inset-bottom)}
+main{width:min(100%,420px);text-align:center}.brand{width:78px;height:78px;margin:0 auto 22px;border-radius:24px;background:linear-gradient(145deg,#3478ff,#1745c0);display:grid;place-items:center;font-size:38px;box-shadow:0 14px 40px #061333}
+h1{font-size:34px;margin:0 0 8px;letter-spacing:-.8px}p{color:#aebbd3;line-height:1.5}.card{margin-top:24px;padding:22px;border:1px solid #263b63;border-radius:22px;background:#101b31cc;backdrop-filter:blur(18px);box-shadow:0 10px 35px #050b18}
+button,a{font:inherit}.primary{width:100%;border:0;border-radius:14px;padding:15px;background:#2c6bed;color:#fff;font-weight:700;cursor:pointer}.primary:active{transform:scale(.98)}.status{display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px}.dot{width:9px;height:9px;border-radius:50%;background:#f5b83d}.links{display:flex;gap:16px;justify-content:center;margin-top:18px;flex-wrap:wrap}.links a{color:#9fc0ff;font-size:13px;text-decoration:none}.small{font-size:12px;color:#7f8daa;margin-top:20px}
+</style>
+</head>
+<body><main>
+<div class="brand" aria-hidden="true">✦</div><h1>GhostGPT</h1><p>Private, focused AI assistance in a simple mobile workspace.</p>
+<section class="card"><div class="status" id="status"><span class="dot"></span><span>Checking service connection…</span></div><button class="primary" id="open" type="button" style="margin-top:18px">Open GhostGPT</button><p class="small">If the service is unavailable, you can retry safely.</p></section>
+<nav class="links" aria-label="Legal"><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="acceptable-use.html">Safety policy</a></nav>
+<p class="small">GhostGPT mobile companion • v1.1</p>
+</main>
+<script>
+const target='https://ghostgpt.live/chat/';const status=document.querySelector('#status span:last-child');const open=()=>{status.textContent='Opening GhostGPT…';window.location.assign(target)};
+document.querySelector('#open').addEventListener('click',open);
+window.addEventListener('online',()=>status.textContent='Online — ready to connect');window.addEventListener('offline',()=>status.textContent='Offline — check your connection');
+setTimeout(()=>{if(navigator.onLine)status.textContent='Online — ready to connect';else status.textContent='Offline — check your connection'},500);
+</script></body></html>
