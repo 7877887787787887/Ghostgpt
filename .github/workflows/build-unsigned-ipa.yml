@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ghostgpt-ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-unsigned-ipa:
     name: Build and package native SwiftUI app
