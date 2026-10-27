@@ -46,7 +46,8 @@ jobs:
           ! grep -q '@AppStorage("localModelAPIKey")' ios-native/SceneDelegate.swift
           ! grep -q '@AppStorage("terminalGatewayToken")' ios-native/SceneDelegate.swift
           ! grep -q '@AppStorage("mcpBearerToken")' ios-native/SceneDelegate.swift
-          grep -q 'The model gateway returned HTTP' ios-native/SceneDelegate.swift
+          grep -q 'LM Studio returned HTTP' ios-native/SceneDelegate.swift
+grep -q 'Ollama chat returned HTTP' ios-native/SceneDelegate.swift
           grep -q 'private func checkGatewayConnection' ios-native/SceneDelegate.swift
           grep -q 'private func executeApprovedStep' ios-native/SceneDelegate.swift
           grep -q 'confirmationDialog("Run a potentially risky PowerShell command?"' ios-native/SceneDelegate.swift
