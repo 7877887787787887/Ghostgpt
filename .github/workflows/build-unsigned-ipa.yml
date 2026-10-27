@@ -109,7 +109,7 @@ jobs:
           /usr/bin/shasum -a 256 GhostGPT-native-unsigned.ipa
 
       - name: Upload native IPA
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: GhostGPT-native-unsigned-iOS-IPA
           path: dist/GhostGPT-native-unsigned.ipa
