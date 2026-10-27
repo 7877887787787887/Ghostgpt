@@ -1,22 +1,35 @@
 import UIKit
 import SwiftUI
+import WebKit
 
-struct ChatMessage: Identifiable {
-    let id = UUID()
+struct ChatMessage: Identifiable, Codable {
+    var id = UUID()
     let text: String
     let isUser: Bool
 }
 
 struct AIReply: Decodable { let reply: String }
-
 struct AIError: Decodable { let error: String }
+
+enum GhostTool: String, CaseIterable, Identifiable {
+    case browser = "Browser"
+    case powershell = "PowerShell"
+    case ssh = "SSH"
+    case plugins = "Plugins"
+    var id: String { rawValue }
+    var icon: String {
+        switch self {
+        case .browser: return "globe"
+        case .powershell: return "terminal"
+        case .ssh: return "server.rack"
+        case .plugins: return "puzzlepiece.extension"
+        }
+    }
+}
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
-
-    func scene(_ scene: UIScene,
-               willConnectTo session: UISceneSession,
-               options connectionOptions: UIScene.ConnectionOptions) {
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
         let window = UIWindow(windowScene: windowScene)
         window.rootViewController = UIHostingController(rootView: GhostGPTRootView())
@@ -27,69 +40,220 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
 struct GhostGPTRootView: View {
     @State private var selectedTab = 0
-
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack { ChatView() }
-                .tabItem { Label("Chat", systemImage: "sparkles") }
-                .tag(0)
+                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }.tag(0)
+            NavigationStack { BrowserView() }
+                .tabItem { Label("Browser", systemImage: "globe") }.tag(1)
+            NavigationStack { ToolsView() }
+                .tabItem { Label("Tools", systemImage: "terminal") }.tag(2)
             NavigationStack { SettingsView() }
-                .tabItem { Label("Settings", systemImage: "gearshape") }
-                .tag(1)
+                .tabItem { Label("Settings", systemImage: "gearshape") }.tag(3)
         }
-        .tint(Color(red: 0.25, green: 0.48, blue: 1.0))
+        .tint(Color(red: 0.36, green: 0.56, blue: 1.0))
         .preferredColorScheme(.dark)
     }
 }
 
 struct ChatView: View {
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
+    @AppStorage("speedMode") private var speedMode = "Balanced"
+    @AppStorage("enabledToolsJSON") private var enabledToolsJSON = "[\"Browser\"]"
+    @AppStorage("savedChatsJSON") private var savedChatsJSON = "[]"
     @State private var draft = ""
     @State private var messages: [ChatMessage] = []
     @State private var isConnecting = false
     @State private var errorText: String?
+    @State private var showingTools = false
+    @State private var showingHistory = false
+    @State private var activeTool: GhostTool?
+    @FocusState private var composerFocused: Bool
+
+    private let quickPrompts = [
+        ("Search the web", "Find current information about "),
+        ("Write code", "Help me write and debug code for "),
+        ("Use a terminal", "Help me plan a safe terminal command for ")
+    ]
+
+    private var enabledTools: [String] {
+        (try? JSONDecoder().decode([String].self, from: Data(enabledToolsJSON.utf8))) ?? ["Browser"]
+    }
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Button { showingHistory = true } label: {
+                    Image(systemName: "line.3.horizontal").font(.system(size: 19, weight: .medium))
+                        .frame(width: 40, height: 40).background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+                }.accessibilityLabel("Chat history and navigation")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("GhostGPT").font(.headline)
+                    Text("AI workspace").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Menu {
+                    Picker("Response speed", selection: $speedMode) {
+                        Text("Fast").tag("Fast")
+                        Text("Balanced").tag("Balanced")
+                        Text("Deep").tag("Deep")
+                    }
+                    Divider()
+                    ForEach(GhostTool.allCases) { tool in
+                        Button { activeTool = tool } label: { Label(tool.rawValue, systemImage: tool.icon) }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "bolt.fill").foregroundStyle(.yellow)
+                        Text(speedMode).font(.caption.weight(.semibold))
+                        Image(systemName: "chevron.down").font(.caption2)
+                    }.padding(.horizontal, 10).padding(.vertical, 9)
+                        .background(.white.opacity(0.07), in: Capsule())
+                }
+            }.padding(.horizontal).padding(.top, 8).padding(.bottom, 10)
+
             if messages.isEmpty {
-                Spacer()
-                Image(systemName: "sparkles").font(.system(size: 44)).foregroundStyle(.blue)
-                Text("GhostGPT").font(.largeTitle.bold()).padding(.top, 12)
-                Text("Your private AI workspace").foregroundStyle(.secondary).padding(.top, 4)
-                Text("Ask a question to get started.").foregroundStyle(.secondary).padding(.top, 18)
-                Spacer()
-            } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(messages) { message in
-                            Text(message.text).padding(12)
-                                .background(message.isUser ? Color.blue : Color(uiColor: .secondarySystemBackground))
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
-                                .frame(maxWidth: .infinity, alignment: message.isUser ? .trailing : .leading)
+                    VStack(spacing: 20) {
+                        Spacer(minLength: 38)
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 27).fill(
+                                LinearGradient(colors: [Color.blue.opacity(0.35), Color.purple.opacity(0.23)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                            ).frame(width: 82, height: 82)
+                            Image(systemName: "sparkles").font(.system(size: 35, weight: .medium)).foregroundStyle(.white)
                         }
-                        if isConnecting {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                Text("GhostGPT is thinking…").foregroundStyle(.secondary)
-                            }.padding(12)
+                        VStack(spacing: 7) {
+                            Text("What can I help with?").font(.system(size: 28, weight: .bold, design: .rounded))
+                            Text("Ask GhostGPT, browse, or open a tool.").font(.subheadline).foregroundStyle(.secondary)
                         }
-                    }.padding()
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                            ForEach(quickPrompts, id: \.0) { item in
+                                Button {
+                                    draft = item.1
+                                    composerFocused = true
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        Text(item.0).font(.subheadline.weight(.semibold))
+                                        Text(item.1).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                        Spacer(minLength: 0)
+                                    }.frame(maxWidth: .infinity, minHeight: 88, alignment: .leading).padding(13)
+                                        .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
+                                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.07), lineWidth: 1))
+                                }.buttonStyle(.plain)
+                            }
+                        }
+                        HStack(spacing: 8) {
+                            Label("Tools ready to configure", systemImage: "wrench.and.screwdriver")
+                            Spacer()
+                            Button("Open tools") { activeTool = .plugins }.font(.caption.weight(.semibold))
+                        }.font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+                    }.padding(.horizontal, 18).padding(.bottom, 24)
+                }
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 18) {
+                            ForEach(messages) { message in
+                                MessageBubble(message: message).id(message.id)
+                            }
+                            if isConnecting {
+                                HStack(spacing: 10) {
+                                    ProgressView().tint(.blue)
+                                    Text("GhostGPT is thinking…").foregroundStyle(.secondary).font(.subheadline)
+                                }.padding(.vertical, 8)
+                            }
+                        }.padding(.horizontal, 16).padding(.vertical, 20)
+                    }
+                    .onChange(of: messages.count) { _, _ in
+                        if let last = messages.last { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) } }
+                    }
                 }
             }
+
             if let errorText {
-                Text(errorText).font(.footnote).foregroundStyle(.red).padding(.horizontal)
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text(errorText).font(.caption)
+                    Spacer()
+                    Button { self.errorText = nil } label: { Image(systemName: "xmark") }
+                }.foregroundStyle(.orange).padding(.horizontal, 16).padding(.bottom, 8)
             }
-            HStack(spacing: 10) {
-                TextField("Message GhostGPT…", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain).padding(12)
-                    .background(Color(uiColor: .secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                Button { send() } label: {
-                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 28))
-                }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isConnecting)
-            }.padding()
+
+            VStack(spacing: 10) {
+                if showingTools {
+                    toolStrip
+                }
+                HStack(alignment: .bottom, spacing: 9) {
+                    Button { withAnimation(.spring(response: 0.25)) { showingTools.toggle() } } label: {
+                        Image(systemName: showingTools ? "xmark" : "plus")
+                            .font(.system(size: 20, weight: .medium))
+                            .frame(width: 42, height: 42)
+                            .background(.white.opacity(0.09), in: Circle())
+                    }.accessibilityLabel("Add tools and plugins")
+                    TextField("Message GhostGPT", text: $draft, axis: .vertical)
+                        .lineLimit(1...5).focused($composerFocused)
+                        .padding(.horizontal, 14).padding(.vertical, 11)
+                        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22))
+                        .submitLabel(.send)
+                    Button { send() } label: {
+                        Image(systemName: isConnecting ? "hourglass" : "arrow.up")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(.black)
+                            .frame(width: 42, height: 42)
+                            .background(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isConnecting ? Color.gray.opacity(0.5) : Color.white, in: Circle())
+                    }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isConnecting)
+                }
+                HStack(spacing: 5) {
+                    Image(systemName: "bolt.fill").foregroundStyle(.yellow)
+                    Text("\(speedMode) mode")
+                    Text("·")
+                    Text(enabledTools.isEmpty ? "No tools selected" : "\(enabledTools.count) tool(s) enabled")
+                    Spacer()
+                }.font(.caption2).foregroundStyle(.tertiary).padding(.leading, 54)
+            }.padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
+                .background(.ultraThinMaterial)
         }
-        .navigationTitle("GhostGPT")
+        .background(Color(uiColor: .systemBackground))
+        .toolbar(.hidden, for: .navigationBar)
+        .sheet(isPresented: $showingHistory) {
+            ChatHistorySheet(onNewChat: {
+                messages = []
+                errorText = nil
+                showingHistory = false
+            })
+        }
+        .sheet(item: $activeTool) { tool in
+            NavigationStack {
+                switch tool {
+                case .browser: BrowserView()
+                case .powershell: TerminalGatewayView(mode: "powershell")
+                case .ssh: TerminalGatewayView(mode: "ssh")
+                case .plugins: PluginsView()
+                }
+            }
+        }
+    }
+
+    private var toolStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 9) {
+                ForEach(GhostTool.allCases) { tool in
+                    Button { activeTool = tool } label: {
+                        Label(tool.rawValue, systemImage: tool.icon)
+                            .font(.caption.weight(.medium)).padding(.horizontal, 12).padding(.vertical, 10)
+                            .background(.white.opacity(0.07), in: Capsule())
+                    }.buttonStyle(.plain)
+                }
+                Menu {
+                    Picker("Speed", selection: $speedMode) {
+                        Text("Fast").tag("Fast"); Text("Balanced").tag("Balanced"); Text("Deep").tag("Deep")
+                    }
+                } label: {
+                    Label("Speed", systemImage: "speedometer").font(.caption.weight(.medium))
+                        .padding(.horizontal, 12).padding(.vertical, 10).background(.white.opacity(0.07), in: Capsule())
+                }
+            }.padding(.horizontal, 3)
+        }
     }
 
     private func send() {
@@ -99,53 +263,324 @@ struct ChatView: View {
         draft = ""
         errorText = nil
         isConnecting = true
-
+        showingTools = false
         Task {
             defer { isConnecting = false }
             do {
-                guard let baseURL = URL(string: serviceURL) else {
-                    throw URLError(.badURL)
+                guard let baseURL = URL(string: serviceURL), baseURL.scheme == "https" else {
+                    throw NSError(domain: "GhostGPT", code: 1, userInfo: [NSLocalizedDescriptionKey: "Use a valid HTTPS service URL in Settings."])
                 }
-                let url = baseURL.appendingPathComponent("chat")
-                var request = URLRequest(url: url)
+                var request = URLRequest(url: baseURL.appendingPathComponent("chat"))
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.timeoutInterval = 45
-                request.httpBody = try JSONEncoder().encode(["message": text])
+                request.timeoutInterval = speedMode == "Fast" ? 25 : 75
+                request.httpBody = try JSONSerialization.data(withJSONObject: [
+                    "message": text,
+                    "speed": speedMode.lowercased(),
+                    "tools": enabledTools
+                ])
                 let (data, response) = try await URLSession.shared.data(for: request)
                 guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
                 if (200..<300).contains(http.statusCode), let answer = try? JSONDecoder().decode(AIReply.self, from: data) {
                     messages.append(ChatMessage(text: answer.reply, isUser: false))
                 } else {
                     let serviceError = try? JSONDecoder().decode(AIError.self, from: data)
-                    throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: serviceError?.error ?? "The AI service could not answer right now."])
+                    throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: serviceError?.error ?? "The AI service returned HTTP \(http.statusCode)."])
                 }
             } catch {
-                errorText = "Couldn’t reach GhostGPT. Check your connection or service address."
+                errorText = error.localizedDescription == "The operation couldn’t be completed. (NSURLErrorDomain error -1009.)"
+                    ? "No internet connection. Reconnect and try again."
+                    : "GhostGPT request failed: \(error.localizedDescription)"
             }
         }
     }
 }
 
-struct SettingsView: View {
-    @AppStorage("notificationsEnabled") private var notificationsEnabled = true
+struct MessageBubble: View {
+    let message: ChatMessage
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            if !message.isUser {
+                Image(systemName: "sparkles").font(.system(size: 15, weight: .semibold)).foregroundStyle(.blue)
+                    .frame(width: 30, height: 30).background(.blue.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+            } else { Spacer(minLength: 28) }
+            VStack(alignment: .leading, spacing: 7) {
+                Text(message.text).textSelection(.enabled).font(.body).frame(maxWidth: .infinity, alignment: .leading)
+            }.padding(message.isUser ? 12 : 2)
+                .background(message.isUser ? Color.blue.opacity(0.28) : Color.clear, in: RoundedRectangle(cornerRadius: 17))
+            if message.isUser {
+                Image(systemName: "person.crop.circle.fill").font(.system(size: 25)).foregroundStyle(.secondary)
+            } else { Spacer(minLength: 8) }
+        }
+    }
+}
+
+struct BrowserView: View {
+    @State private var address = "https://www.google.com"
+    @State private var currentURL = "https://www.google.com"
+    @State private var reloadToken = UUID()
+    @FocusState private var addressFocused: Bool
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "lock.shield").foregroundStyle(.green)
+                TextField("Search or enter URL", text: $address)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                    .focused($addressFocused).submitLabel(.go)
+                    .onSubmit { navigate() }
+                Button { navigate() } label: { Image(systemName: "arrow.right.circle.fill").font(.title2) }
+            }.padding(10).background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14)).padding(12)
+            EmbeddedBrowser(urlString: currentURL, reloadToken: reloadToken)
+            HStack {
+                Button { reloadToken = UUID() } label: { Label("Reload", systemImage: "arrow.clockwise") }
+                Spacer()
+                Button { address = "https://www.google.com"; navigate() } label: { Label("Home", systemImage: "house") }
+                Spacer()
+                Button { UIPasteboard.general.string = currentURL } label: { Label("Copy URL", systemImage: "doc.on.doc") }
+            }.font(.caption).padding(12).background(.ultraThinMaterial)
+        }
+        .navigationTitle("Ghost Browser").navigationBarTitleDisplayMode(.inline)
+    }
+    private func navigate() {
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if trimmed.contains(" ") || (!trimmed.contains(".") && !trimmed.hasPrefix("http")) {
+            currentURL = "https://www.google.com/search?q=" + (trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")
+        } else {
+            currentURL = trimmed.contains("://") ? trimmed : "https://" + trimmed
+        }
+        addressFocused = false
+    }
+}
+
+struct EmbeddedBrowser: UIViewRepresentable {
+    let urlString: String
+    let reloadToken: UUID
+    func makeUIView(context: Context) -> WKWebView {
+        let view = WKWebView()
+        view.allowsBackForwardNavigationGestures = true
+        view.isInspectable = false
+        return view
+    }
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        if context.coordinator.lastURL != urlString, let url = URL(string: urlString) {
+            context.coordinator.lastURL = urlString
+            webView.load(URLRequest(url: url))
+        }
+        if context.coordinator.lastReload != reloadToken {
+            context.coordinator.lastReload = reloadToken
+            if context.coordinator.lastURL == urlString { webView.reload() }
+        }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    class Coordinator {
+        var lastURL = ""
+        var lastReload = UUID()
+    }
+}
+
+struct ToolsView: View {
     var body: some View {
         List {
-            Section("Connection") {
-                Label("Native SwiftUI interface", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                Label("Cloudflare AI service", systemImage: "cloud.fill").foregroundStyle(.blue)
-                Label("Cloudflare AI connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            Section("Built-in tools") {
+                NavigationLink { BrowserView() } label: { Label("Ghost Browser", systemImage: "globe") }
+                NavigationLink { TerminalGatewayView(mode: "powershell") } label: { Label("PowerShell terminal", systemImage: "terminal") }
+                NavigationLink { TerminalGatewayView(mode: "ssh") } label: { Label("SSH terminal", systemImage: "server.rack") }
+                NavigationLink { PluginsView() } label: { Label("Plugins & capabilities", systemImage: "puzzlepiece.extension") }
             }
-            Section("Preferences") { Toggle("Notifications", isOn: $notificationsEnabled) }
-            Section("Advanced") {
-                NavigationLink("Advanced Settings") { AdvancedSettingsView() }
+            Section("Execution requirements") {
+                Text("The browser runs in the app. PowerShell and SSH require a secure terminal gateway that you control; the app does not execute shell commands locally or expose credentials to GhostGPT.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }.navigationTitle("Tools")
+    }
+}
+
+struct PluginsView: View {
+    @AppStorage("enabledToolsJSON") private var enabledToolsJSON = "[\"Browser\"]"
+    @State private var selected: Set<String> = ["Browser"]
+    private let tools: [(String, String, String)] = [
+        ("Browser", "Search and open websites inside GhostGPT.", "globe"),
+        ("PowerShell", "Run commands through your configured Windows terminal gateway.", "terminal"),
+        ("SSH", "Connect to remote servers through your configured SSH gateway.", "server.rack"),
+        ("File tools", "Prepare files and command snippets for review.", "doc.text")
+    ]
+    var body: some View {
+        List {
+            Section("Available capabilities") {
+                ForEach(tools, id: \.0) { tool in
+                    Toggle(isOn: Binding(get: { selected.contains(tool.0) }, set: { enabled in
+                        if enabled { selected.insert(tool.0) } else { selected.remove(tool.0) }
+                        save()
+                    })) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(tool.0).font(.body.weight(.medium))
+                                Text(tool.1).font(.caption).foregroundStyle(.secondary)
+                            }
+                        } icon: { Image(systemName: tool.2).frame(width: 25) }
+                    }
+                    .tint(.blue)
+                }
+            }
+            Section {
+                Text("Enabling a capability adds it to the app's selected tool list. The AI service must support a tool before it can execute it. Terminal execution additionally requires a configured gateway.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Plugins & tools")
+        .onAppear { selected = Set((try? JSONDecoder().decode([String].self, from: Data(enabledToolsJSON.utf8))) ?? ["Browser"]) }
+    }
+    private func save() { enabledToolsJSON = String(data: (try? JSONEncoder().encode(Array(selected).sorted())) ?? Data("[]".utf8), encoding: .utf8) ?? "[]" }
+}
+
+struct TerminalGatewayView: View {
+    let mode: String
+    @AppStorage("terminalGatewayURL") private var gatewayURL = ""
+    @State private var host = ""
+    @State private var username = ""
+    @State private var command = ""
+    @State private var output = "Connect a trusted terminal gateway in Settings to execute commands. No command has been run."
+    @State private var running = false
+    @State private var showingSettings = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label(mode == "ssh" ? "SSH terminal" : "PowerShell terminal", systemImage: mode == "ssh" ? "server.rack" : "terminal")
+                .font(.title2.bold())
+            Text(mode == "ssh"
+                 ? "Send commands to a remote SSH gateway you control."
+                 : "Send commands to a Windows PowerShell gateway you control.")
+                .font(.subheadline).foregroundStyle(.secondary)
+            if gatewayURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Label("Gateway not configured", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Button("Configure gateway") { showingSettings = true }.buttonStyle(.borderedProminent)
+            } else {
+                TextField(mode == "ssh" ? "user@host or server alias" : "Windows host or session name", text: $host)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder)
+                TextField("Username (if required by gateway)", text: $username)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder)
+                ScrollView {
+                    Text(output).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                }.frame(minHeight: 140).background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+                HStack(spacing: 8) {
+                    TextField(mode == "ssh" ? "Command to run…" : "PowerShell command…", text: $command, axis: .vertical)
+                        .textFieldStyle(.roundedBorder).lineLimit(1...4)
+                    Button { Task { await execute() } } label: {
+                        Image(systemName: running ? "hourglass" : "arrow.up.circle.fill").font(.title)
+                    }.disabled(running || command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || host.isEmpty)
+                }
+                Button("Change gateway") { showingSettings = true }.font(.caption)
+            }
+            Spacer()
+            Text("Security: only use a gateway you trust. Review commands before running them. Credentials should be handled by the gateway, not pasted into chat.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }.padding()
+            .navigationTitle(mode == "ssh" ? "SSH" : "PowerShell")
+            .sheet(isPresented: $showingSettings) {
+                NavigationStack { TerminalGatewaySettingsView().toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingSettings = false } } } }
+            }
+    }
+
+    private func execute() async {
+        guard let base = URL(string: gatewayURL), base.scheme == "https" else {
+            output = "Gateway URL must be a valid HTTPS address."
+            return
+        }
+        let submitted = command
+        command = ""
+        running = true
+        defer { running = false }
+        do {
+            var request = URLRequest(url: base)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.timeoutInterval = 90
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "mode": mode, "host": host, "username": username, "command": submitted
+            ])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            let body = String(data: data, encoding: .utf8) ?? "(Non-text response)"
+            if (200..<300).contains(http.statusCode) {
+                output += "\n\n$ \(submitted)\n\(body)"
+            } else {
+                output += "\n\nRequest failed (HTTP \(http.statusCode)):\n\(body)"
+            }
+        } catch {
+            output += "\n\nConnection failed: \(error.localizedDescription)"
+        }
+    }
+}
+
+struct TerminalGatewaySettingsView: View {
+    @AppStorage("terminalGatewayURL") private var gatewayURL = ""
+    var body: some View {
+        Form {
+            Section("Secure terminal gateway") {
+                TextField("HTTPS gateway endpoint URL", text: $gatewayURL)
+                    .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
+                Text("This must be a gateway you control that accepts POST JSON fields: mode, host, username, and command. It must authenticate requests and enforce host allow-lists. The app does not provide a shell server itself.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("Security") {
+                Text("Do not expose a raw PowerShell or SSH endpoint to the public internet. Use authentication, per-user authorization, host allow-lists, audit logs, rate limits, and TLS.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }.navigationTitle("Terminal gateway")
+    }
+}
+
+struct ChatHistorySheet: View {
+    let onNewChat: () -> Void
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button(action: onNewChat) { Label("New chat", systemImage: "square.and.pencil") }
+                }
+                Section("Workspace") {
+                    Label("GhostGPT", systemImage: "sparkles")
+                    Text("Conversation history is kept in this session for now. Persistent cloud history requires service-side support.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }.navigationTitle("Chats")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { onNewChat() } } }
+        }.presentationDetents([.medium, .large])
+    }
+}
+
+struct SettingsView: View {
+    @AppStorage("notificationsEnabled") private var notificationsEnabled = true
+    @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
+    @AppStorage("speedMode") private var speedMode = "Balanced"
+    var body: some View {
+        List {
+            Section("GhostGPT") {
+                Label("Native SwiftUI interface", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                Label("AI endpoint configured", systemImage: "cloud.fill").foregroundStyle(.blue)
+                Text("The endpoint is configured; connection status is checked when you send a message.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Preferences") {
+                Picker("Response speed", selection: $speedMode) {
+                    Text("Fast").tag("Fast"); Text("Balanced").tag("Balanced"); Text("Deep").tag("Deep")
+                }
+                Toggle("Notifications", isOn: $notificationsEnabled)
+            }
+            Section("Tools") {
+                NavigationLink("Plugins & capabilities") { PluginsView() }
+                NavigationLink("Terminal gateway (PowerShell / SSH)") { TerminalGatewaySettingsView() }
+                NavigationLink("Browser") { BrowserView() }
+            }
+            Section("Connection") {
+                NavigationLink("Advanced connection settings") { AdvancedSettingsView() }
             }
             Section("Policies") {
-                Text("Privacy Policy")
-                Text("Terms of Use")
-                Text("Acceptable Use & Safety")
+                Link("Privacy Policy", destination: URL(string: "https://ghostgpt.live/privacy")!)
+                Link("Terms of Use", destination: URL(string: "https://ghostgpt.live/terms")!)
             }
-            Section { Text("GhostGPT native iOS • 1.0").foregroundStyle(.secondary) }
+            Section { Text("GhostGPT • Native iOS workspace").foregroundStyle(.secondary) }
         }.navigationTitle("Settings")
     }
 }
@@ -156,19 +591,24 @@ struct AdvancedSettingsView: View {
     @AppStorage("debugLogging") private var debugLogging = false
     var body: some View {
         Form {
-            Section("Service") {
-                TextField("Service URL", text: $serviceURL)
-                    .textInputAutocapitalization(.never).keyboardType(.URL)
+            Section("AI service") {
+                TextField("Service URL", text: $serviceURL).textInputAutocapitalization(.never).keyboardType(.URL)
                 Toggle("Use Cloudflare edge connection", isOn: $cloudflareEnabled)
+            }
+            Section("Performance") {
+                Text("Fast mode uses a shorter client timeout; Balanced and Deep allow longer responses. Actual model reasoning speed depends on the connected AI service.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Diagnostics") {
                 Toggle("Debug logging", isOn: $debugLogging)
                 Button("Reset connection settings", role: .destructive) {
-                    serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"; cloudflareEnabled = true; debugLogging = false
+                    serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
+                    cloudflareEnabled = true
+                    debugLogging = false
                 }
             }
-            Section("Safety") {
-                Text("Never store API keys, passwords, or private tokens in this app. Keep secrets on a protected server or Cloudflare Worker.")
+            Section("Security") {
+                Text("Keep API keys, passwords, and private tokens on a protected server. Do not expose raw shell services to the public internet.")
                     .foregroundStyle(.secondary)
             }
         }.navigationTitle("Advanced Settings")
