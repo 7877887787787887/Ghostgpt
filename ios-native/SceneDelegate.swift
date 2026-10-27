@@ -1994,14 +1994,20 @@ struct AgentWorkspaceView: View {
             status = "Configure a valid HTTPS PowerShell gateway in Settings. No command was run."
             return
         }
+        let token = KeychainStore.migratedValue(for: "terminalGatewayToken")
+        guard !token.isEmpty else {
+            status = "PowerShell gateway bearer token is missing. Configure it in Settings → Terminal gateway. No command was run."
+            runLog.insert(status, at: 0)
+            runLog = Array(runLog.prefix(100))
+            return
+        }
         executingStep = true
         defer { executingStep = false }
         do {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            let token = KeychainStore.migratedValue(for: "terminalGatewayToken")
-            if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             request.timeoutInterval = 65
             request.httpBody = try JSONSerialization.data(withJSONObject: [
                 "mode": "powershell",
@@ -2014,12 +2020,17 @@ struct AgentWorkspaceView: View {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
             let body = String(data: data, encoding: .utf8) ?? "(Non-text response)"
-            let success = (200...299).contains(http.statusCode)
-            runLog.insert("Step \(stepIndex + 1) \(success ? "returned success" : "failed")\nPurpose: \(proposalPurpose)\nCommand: \(submitted)\nHTTP \(http.statusCode)\nOutput: \(String(body.prefix(3000)))", at: 0)
+            let resultObject = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let httpSuccess = (200...299).contains(http.statusCode)
+            let commandOK = resultObject?["ok"] as? Bool == true
+            let exitCode = resultObject?["exit_code"] as? Int
+            let exitCodeText = exitCode.map { String($0) } ?? "unknown"
+            let success = httpSuccess && commandOK && (exitCode == nil || exitCode == 0)
+            runLog.insert("Step \(stepIndex + 1) \(success ? "returned success" : "failed")\nPurpose: \(proposalPurpose)\nCommand: \(submitted)\nHTTP \(http.statusCode)\nCommand result: \(commandOK ? "ok" : "failed")\nExit code: \(exitCodeText)\nOutput: \(String(body.prefix(3000)))", at: 0)
             runLog = Array(runLog.prefix(100))
             if success { stepIndex += 1 }
             proposedCommand = ""
-            status = success ? "Step returned HTTP success. Inspecting output and preparing the next proposal…" : "Step failed. Inspecting the error and preparing a recovery proposal…"
+            status = success ? "Step succeeded. Inspecting output and preparing the next proposal…" : "Step failed (HTTP \(http.statusCode), command result \(commandOK ? "ok" : "failed"), exit code \(exitCodeText)). Inspecting the error and preparing a recovery proposal…"
             await prepareNextStep()
         } catch {
             runLog.insert("Step \(stepIndex + 1) could not reach the gateway: \(error.localizedDescription)", at: 0)

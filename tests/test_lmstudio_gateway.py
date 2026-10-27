@@ -393,5 +393,13 @@ class GatewayAuthenticationTests(unittest.TestCase):
         self.assertIn('components.scheme?.lowercased() == "https"', source)
         self.assertIn('Provider changed. Scan the new provider', source)
 
+    def test_agent_uses_actual_command_result_and_requires_gateway_token(self):
+        source = (ROOT / "ios-native" / "SceneDelegate.swift").read_text(encoding="utf-8")
+        self.assertIn('let commandOK = resultObject?["ok"] as? Bool == true', source)
+        self.assertIn('let exitCode = resultObject?["exit_code"] as? Int', source)
+        self.assertIn('let success = httpSuccess && commandOK && (exitCode == nil || exitCode == 0)', source)
+        self.assertIn("PowerShell gateway bearer token is missing", source)
+        self.assertIn("await prepareNextStep()", source)
+
 if __name__ == "__main__":
     unittest.main()
