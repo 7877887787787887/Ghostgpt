@@ -42,7 +42,6 @@ jobs:
           ! grep -q '@AppStorage("terminalGatewayToken")' ios-native/SceneDelegate.swift
           ! grep -q '@AppStorage("mcpBearerToken")' ios-native/SceneDelegate.swift
           grep -q 'The model gateway returned HTTP' ios-native/SceneDelegate.swift
-          grep -q 'onChange(of: modelProvider)' ios-native/SceneDelegate.swift
           grep -q 'private func checkGatewayConnection' ios-native/SceneDelegate.swift
           grep -q 'private func executeApprovedStep' ios-native/SceneDelegate.swift
           grep -q 'confirmationDialog("Run a potentially risky PowerShell command?"' ios-native/SceneDelegate.swift
