@@ -1074,7 +1074,7 @@ struct MCPConnectorView: View {
     private func callSelectedTool() async {
         guard let argsData = argumentsJSON.data(using: .utf8),
               let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any] else {
-            resultText = "Arguments must be a valid JSON object, for example: {\\"path\\":\\"/home/pi\\"}"
+            resultText = "Arguments must be a valid JSON object. Example: provide the arguments required by the selected tool."
             return
         }
         guard let tool = tools.first(where: { $0.name == selectedTool }) else {
