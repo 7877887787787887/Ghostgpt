@@ -603,6 +603,87 @@ struct SettingsView: View {
     }
 }
 
+struct LocalModelsSettingsView: View {
+    @AppStorage("modelProvider") private var modelProvider = "Cloudflare"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = ""
+    @AppStorage("localModelID") private var localModelID = "deepseek-r1:14b"
+    @AppStorage("localModelAPIKey") private var localModelAPIKey = ""
+    @State private var availableModels: [String] = []
+    @State private var status = "Model inventory has not been checked."
+    @State private var loading = false
+
+    var body: some View {
+        Form {
+            Section("Model provider") {
+                Picker("Provider", selection: $modelProvider) {
+                    Text("Cloudflare AI").tag("Cloudflare")
+                    Text("Ollama (PC)").tag("Ollama")
+                    Text("LM Studio (PC)").tag("LM Studio")
+                }
+                if modelProvider != "Cloudflare" {
+                    TextField("HTTPS Tailscale model gateway URL", text: $localModelEndpoint)
+                        .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
+                    SecureField("API key (if required)", text: $localModelAPIKey)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    TextField("Model ID", text: $localModelID)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Button { Task { await discoverModels() } } label: {
+                        Label(loading ? "Checking models…" : "Scan PC model inventory", systemImage: "arrow.clockwise")
+                    }.disabled(loading || localModelEndpoint.isEmpty)
+                    Text(status).font(.footnote).foregroundStyle(.secondary)
+                    if !availableModels.isEmpty {
+                        Picker("Installed model", selection: $localModelID) {
+                            ForEach(availableModels, id: \.self) { model in Text(model).tag(model) }
+                        }
+                    }
+                } else {
+                    Text("Cloudflare AI uses the configured GhostGPT Worker. Choose Ollama or LM Studio to use models hosted on your PC.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            Section("PC model inventory (last checked)") {
+                Text("Ollama models detected during setup: deepseek-r1:14b, qwen3.5:9b, qwen3:8b, qwen3:14b, gps-qwen3-fast-8b:latest, and gps-qwen3-fast:latest. LM Studio also advertises Meta Llama 3.1 8B Instruct, GPT-OSS 20B, Qwen 2.5 VL 7B, DeepSeek R1 Distill Qwen 7B, and Qwen 3.8 27B.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Text("Recommended starting point: DeepSeek R1 14B for reasoning; Qwen 3.5 9B when you want a lighter, potentially faster model. The app only connects to a local model after you configure a private HTTPS gateway.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("Network security") {
+                Text("Use a private HTTPS endpoint reachable through Tailscale. Do not publish Ollama or LM Studio directly to the public internet. Model scanning runs only when you press the scan button.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }.navigationTitle("AI models")
+    }
+
+    private func discoverModels() async {
+        let cleaned = localModelEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let base = URL(string: cleaned), base.scheme == "https" else {
+            status = "Enter a valid HTTPS Tailscale gateway URL."
+            return
+        }
+        loading = true
+        defer { loading = false }
+        do {
+            let path = modelProvider == "Ollama" ? "api/tags" : "v1/models"
+            var request = URLRequest(url: base.appendingPathComponent(path))
+            request.timeoutInterval = 12
+            if !localModelAPIKey.isEmpty { request.setValue("Bearer \(localModelAPIKey)", forHTTPHeaderField: "Authorization") }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                throw NSError(domain: "GhostGPT", code: 3, userInfo: [NSLocalizedDescriptionKey: "Model inventory endpoint did not return success."])
+            }
+            if modelProvider == "Ollama" {
+                availableModels = try JSONDecoder().decode(OllamaTags.self, from: data).models.map(\.name).sorted()
+            } else {
+                availableModels = try JSONDecoder().decode(OpenAIModels.self, from: data).data.map(\.id).sorted()
+            }
+            if !availableModels.contains(localModelID), let first = availableModels.first { localModelID = first }
+            status = "Found \(availableModels.count) model(s)."
+        } catch {
+            status = "Could not scan models: \(error.localizedDescription)"
+        }
+    }
+}
+
 struct AdvancedSettingsView: View {
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("cloudflareEnabled") private var cloudflareEnabled = true
