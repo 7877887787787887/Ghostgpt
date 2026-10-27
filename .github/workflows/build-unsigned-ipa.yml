@@ -1,0 +1,71 @@
+name: Build unsigned iOS IPA
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-unsigned-ipa:
+    name: Build unsigned iOS IPA
+    runs-on: macos-26
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install Capacitor dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Add iOS platform
+        run: npx cap add ios
+
+      - name: Sync web assets and native plugins
+        run: npx cap sync ios
+
+      - name: Build without code signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/ios \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            build
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="build/ios/Build/Products/Release-iphoneos/App.app"
+          test -d "$app_path"
+          if /usr/bin/codesign --verify --deep "$app_path" >/dev/null 2>&1; then
+            echo "Unexpected code signature found; refusing to label this artifact unsigned."
+            exit 1
+          fi
+          mkdir -p dist/Payload
+          /usr/bin/ditto "$app_path" dist/Payload/App.app
+          cd dist
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload GhostGPT-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GhostGPT-unsigned-iOS-IPA
+          path: dist/GhostGPT-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
