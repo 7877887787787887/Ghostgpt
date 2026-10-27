@@ -1,0 +1,3 @@
+# Private gateway bearer tokens must never be committed
+gateway.token
+**/gateway.token
