@@ -328,11 +328,17 @@ struct ChatView: View {
         request.timeoutInterval = speedMode == "Fast" ? 45 : 180
         if modelProvider == "Ollama" {
             request.httpBody = try JSONSerialization.data(withJSONObject: [
-                "model": localModelID, "stream": false, "messages": history
+                "model": localModelID,
+                "stream": false,
+                "messages": history,
+                "options": ["num_predict": speedMode == "Fast" ? 128 : 512, "num_ctx": 8192]
             ])
         } else {
             request.httpBody = try JSONSerialization.data(withJSONObject: [
-                "model": localModelID, "stream": false, "messages": history
+                "model": localModelID,
+                "stream": false,
+                "messages": history,
+                "max_tokens": speedMode == "Fast" ? 128 : 512
             ])
         }
         let (data, response) = try await URLSession.shared.data(for: request)
