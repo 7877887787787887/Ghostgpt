@@ -449,6 +449,9 @@ struct BrowserView: View {
     @State private var address = "https://www.google.com"
     @State private var currentURL = "https://www.google.com"
     @State private var reloadToken = UUID()
+    @State private var canGoBack = false
+    @State private var canGoForward = false
+    @State private var browserLoading = false
     @FocusState private var addressFocused: Bool
     var body: some View {
         VStack(spacing: 0) {
@@ -460,13 +463,26 @@ struct BrowserView: View {
                     .onSubmit { navigate() }
                 Button { navigate() } label: { Image(systemName: "arrow.right.circle.fill").font(.title2) }
             }.padding(10).background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14)).padding(12)
-            EmbeddedBrowser(urlString: currentURL, reloadToken: reloadToken)
-            HStack {
+            EmbeddedBrowser(
+                urlString: currentURL,
+                reloadToken: reloadToken,
+                canGoBack: $canGoBack,
+                canGoForward: $canGoForward,
+                isLoading: $browserLoading
+            )
+            if browserLoading { ProgressView().progressViewStyle(.linear).padding(.horizontal, 12) }
+            HStack(spacing: 18) {
+                Button { NotificationCenter.default.post(name: .ghostBrowserBack, object: nil) } label: {
+                    Image(systemName: "chevron.left")
+                }.disabled(!canGoBack).accessibilityLabel("Go back")
+                Button { NotificationCenter.default.post(name: .ghostBrowserForward, object: nil) } label: {
+                    Image(systemName: "chevron.right")
+                }.disabled(!canGoForward).accessibilityLabel("Go forward")
+                Spacer()
                 Button { reloadToken = UUID() } label: { Label("Reload", systemImage: "arrow.clockwise") }
                 Spacer()
                 Button { address = "https://www.google.com"; navigate() } label: { Label("Home", systemImage: "house") }
-                Spacer()
-                Button { UIPasteboard.general.string = currentURL } label: { Label("Copy URL", systemImage: "doc.on.doc") }
+                Button { UIPasteboard.general.string = currentURL } label: { Image(systemName: "doc.on.doc") }.accessibilityLabel("Copy URL")
             }.font(.caption).padding(12).background(.ultraThinMaterial)
         }
         .navigationTitle("Ghost Browser").navigationBarTitleDisplayMode(.inline)
@@ -495,15 +511,29 @@ struct BrowserView: View {
     }
 }
 
+extension Notification.Name {
+    static let ghostBrowserBack = Notification.Name("GhostGPTBrowserBack")
+    static let ghostBrowserForward = Notification.Name("GhostGPTBrowserForward")
+}
+
 struct EmbeddedBrowser: UIViewRepresentable {
     let urlString: String
     let reloadToken: UUID
+    @Binding var canGoBack: Bool
+    @Binding var canGoForward: Bool
+    @Binding var isLoading: Bool
+
     func makeUIView(context: Context) -> WKWebView {
         let view = WKWebView()
         view.allowsBackForwardNavigationGestures = true
+        view.navigationDelegate = context.coordinator
+        context.coordinator.webView = view
+        context.coordinator.observeNavigationButtons()
         return view
     }
+
     func updateUIView(_ webView: WKWebView, context: Context) {
+        context.coordinator.parent = self
         if context.coordinator.lastURL != urlString, let url = URL(string: urlString) {
             context.coordinator.lastURL = urlString
             webView.load(URLRequest(url: url))
@@ -512,11 +542,59 @@ struct EmbeddedBrowser: UIViewRepresentable {
             context.coordinator.lastReload = reloadToken
             if context.coordinator.lastURL == urlString { webView.reload() }
         }
+        context.coordinator.refreshState()
     }
-    func makeCoordinator() -> Coordinator { Coordinator() }
-    class Coordinator {
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    class Coordinator: NSObject, WKNavigationDelegate {
+        var parent: EmbeddedBrowser
+        weak var webView: WKWebView?
         var lastURL = ""
         var lastReload = UUID()
+        private var backObserver: NSObjectProtocol?
+        private var forwardObserver: NSObjectProtocol?
+
+        init(parent: EmbeddedBrowser) { self.parent = parent }
+
+        func observeNavigationButtons() {
+            backObserver = NotificationCenter.default.addObserver(forName: .ghostBrowserBack, object: nil, queue: .main) { [weak self] _ in
+                guard let self, let webView = self.webView, webView.canGoBack else { return }
+                webView.goBack()
+            }
+            forwardObserver = NotificationCenter.default.addObserver(forName: .ghostBrowserForward, object: nil, queue: .main) { [weak self] _ in
+                guard let self, let webView = self.webView, webView.canGoForward else { return }
+                webView.goForward()
+            }
+        }
+
+        func refreshState() {
+            guard let webView else { return }
+            parent.canGoBack = webView.canGoBack
+            parent.canGoForward = webView.canGoForward
+            parent.isLoading = webView.isLoading
+        }
+
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            parent.isLoading = true
+            refreshState()
+        }
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            parent.isLoading = false
+            refreshState()
+        }
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            parent.isLoading = false
+            refreshState()
+        }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            parent.isLoading = false
+            refreshState()
+        }
+        deinit {
+            if let backObserver { NotificationCenter.default.removeObserver(backObserver) }
+            if let forwardObserver { NotificationCenter.default.removeObserver(forwardObserver) }
+        }
     }
 }
 
