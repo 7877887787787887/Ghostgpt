@@ -748,6 +748,11 @@ struct ChatHistorySheet: View {
                 Section {
                     Button(action: onNewChat) { Label("New chat", systemImage: "square.and.pencil") }
                     if !sessions.isEmpty {
+                        Button {
+                            UIPasteboard.general.string = savedChatsJSON
+                        } label: {
+                            Label("Copy chat backup (JSON)", systemImage: "square.and.arrow.up")
+                        }
                         Button(role: .destructive) { confirmingClear = true } label: {
                             Label("Clear all saved chats", systemImage: "trash")
                         }
