@@ -33,6 +33,9 @@ class FakeHandler:
     def authorize_request(self):
         return gateway.Handler.authorize_request(self)
 
+    def proxy_to_lmstudio(self):
+        return gateway.Handler.proxy_to_lmstudio(self)
+
     def send_response(self, status, message=None):
         self.status = status
 
