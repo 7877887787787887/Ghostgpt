@@ -1,6 +1,7 @@
 import UIKit
 import SwiftUI
 import WebKit
+import Security
 
 struct ChatMessage: Identifiable, Codable {
     var id = UUID()
@@ -21,6 +22,61 @@ struct OllamaTags: Decodable { struct Model: Decodable { let name: String }; let
 struct OpenAIModels: Decodable { struct Model: Decodable { let id: String }; let data: [Model] }
 struct OpenAIChatResponse: Decodable { struct Choice: Decodable { struct Message: Decodable { let content: String }; let message: Message }; let choices: [Choice] }
 struct OllamaChatResponse: Decodable { let message: Message; struct Message: Decodable { let content: String } }
+
+enum KeychainStore {
+    private static let service = Bundle.main.bundleIdentifier ?? "GhostGPT"
+
+    private static func query(for key: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+    }
+
+    static func load(_ key: String) -> String? {
+        var request = query(for: key)
+        request[kSecReturnData as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    @discardableResult
+    static func save(_ value: String, for key: String) -> Bool {
+        let itemQuery = query(for: key)
+        if value.isEmpty {
+            let status = SecItemDelete(itemQuery as CFDictionary)
+            return status == errSecSuccess || status == errSecItemNotFound
+        }
+        let data = Data(value.utf8)
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+        let updateStatus = SecItemUpdate(itemQuery as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecSuccess { return true }
+        guard updateStatus == errSecItemNotFound else { return false }
+        var addQuery = itemQuery
+        addQuery[kSecValueData as String] = data
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        return SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess
+    }
+
+    static func migratedValue(for key: String) -> String {
+        if let secureValue = load(key), !secureValue.isEmpty {
+            UserDefaults.standard.removeObject(forKey: key)
+            return secureValue
+        }
+        let legacyValue = UserDefaults.standard.string(forKey: key) ?? ""
+        guard !legacyValue.isEmpty else { return load(key) ?? "" }
+        if save(legacyValue, for: key) { UserDefaults.standard.removeObject(forKey: key) }
+        return legacyValue
+    }
+}
+
 
 enum GhostTool: String, CaseIterable, Identifiable {
     case browser = "Browser"
@@ -73,7 +129,6 @@ struct ChatView: View {
     @AppStorage("modelProvider") private var modelProvider = "Cloudflare"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
     @AppStorage("localModelID") private var localModelID = "gps-qwen3-fast-8b:latest"
-    @AppStorage("localModelAPIKey") private var localModelAPIKey = ""
     @AppStorage("enabledToolsJSON") private var enabledToolsJSON = "[\"Browser\"]"
     @AppStorage("savedChatsJSON") private var savedChatsJSON = "[]"
     @State private var draft = ""
@@ -401,7 +456,8 @@ struct ChatView: View {
         var request = URLRequest(url: base.appendingPathComponent(path))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !localModelAPIKey.isEmpty { request.setValue("Bearer \(localModelAPIKey)", forHTTPHeaderField: "Authorization") }
+        let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
+        if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         request.timeoutInterval = speedMode == "Fast" ? 45 : 180
         if modelProvider == "Ollama" {
             request.httpBody = try JSONSerialization.data(withJSONObject: [
@@ -682,7 +738,6 @@ struct PluginsView: View {
 struct TerminalGatewayView: View {
     let mode: String
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
-    @AppStorage("terminalGatewayToken") private var gatewayToken = ""
     @State private var host = ""
     @State private var username = ""
     @State private var command = ""
@@ -786,6 +841,7 @@ struct TerminalGatewayView: View {
             var request = URLRequest(url: base)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let gatewayToken = KeychainStore.migratedValue(for: "terminalGatewayToken")
             if !gatewayToken.isEmpty { request.setValue("Bearer \(gatewayToken)", forHTTPHeaderField: "Authorization") }
             request.timeoutInterval = 30
             request.httpBody = try JSONSerialization.data(withJSONObject: [
@@ -807,7 +863,7 @@ struct TerminalGatewayView: View {
 
 struct TerminalGatewaySettingsView: View {
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
-    @AppStorage("terminalGatewayToken") private var gatewayToken = ""
+    @State private var gatewayToken = KeychainStore.migratedValue(for: "terminalGatewayToken")
     var body: some View {
         Form {
             Section("Secure terminal gateway") {
@@ -823,6 +879,7 @@ struct TerminalGatewaySettingsView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }.navigationTitle("Terminal gateway")
+            .onChange(of: gatewayToken) { value in _ = KeychainStore.save(value, for: "terminalGatewayToken") }
     }
 }
 
@@ -901,7 +958,7 @@ struct ChatHistorySheet: View {
 
 struct MCPConnectorView: View {
     @AppStorage("mcpServerURL") private var serverURL = ""
-    @AppStorage("mcpBearerToken") private var bearerToken = ""
+    @State private var bearerToken = KeychainStore.migratedValue(for: "mcpBearerToken")
     @State private var tools: [MCPToolInfo] = []
     @State private var selectedTool = ""
     @State private var argumentsJSON = "{}"
@@ -949,6 +1006,7 @@ struct MCPConnectorView: View {
             }
         }
         .navigationTitle("MCP connectors")
+            .onChange(of: bearerToken) { value in _ = KeychainStore.save(value, for: "mcpBearerToken") }
     }
 
     private func nextRequestID() -> Int {
@@ -1145,7 +1203,7 @@ struct LocalModelsSettingsView: View {
     @AppStorage("modelProvider") private var modelProvider = "Cloudflare"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
     @AppStorage("localModelID") private var localModelID = "gps-qwen3-fast-8b:latest"
-    @AppStorage("localModelAPIKey") private var localModelAPIKey = ""
+    @State private var localModelAPIKey = KeychainStore.migratedValue(for: "localModelAPIKey")
     @State private var availableModels: [String] = []
     @State private var status = "Model inventory has not been checked."
     @State private var loading = false
@@ -1190,6 +1248,7 @@ struct LocalModelsSettingsView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }.navigationTitle("AI models")
+            .onChange(of: localModelAPIKey) { value in _ = KeychainStore.save(value, for: "localModelAPIKey") }
     }
 
     private func discoverModels() async {
@@ -1204,7 +1263,8 @@ struct LocalModelsSettingsView: View {
             let path = modelProvider == "Ollama" ? "api/tags" : "v1/models"
             var request = URLRequest(url: base.appendingPathComponent(path))
             request.timeoutInterval = 12
-            if !localModelAPIKey.isEmpty { request.setValue("Bearer \(localModelAPIKey)", forHTTPHeaderField: "Authorization") }
+        let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
+        if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 throw NSError(domain: "GhostGPT", code: 3, userInfo: [NSLocalizedDescriptionKey: "Model inventory endpoint did not return success."])
