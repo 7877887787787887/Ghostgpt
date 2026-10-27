@@ -1744,6 +1744,7 @@ struct AgentWorkspaceView: View {
         status = "Planning the next action from the latest run results…"
         defer { preparingStep = false }
         do {
+            let recentLog = runLog.prefix(12).reversed().joined(separator: "\n\n")
             let instruction = """
             You are GhostGPT's bounded PowerShell agent. Goal: \(cleanGoal)
             Current plan:
