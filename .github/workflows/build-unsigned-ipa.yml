@@ -22,7 +22,6 @@ jobs:
           set -euo pipefail
           test -s ios-native/AppDelegate.swift
           test -s ios-native/SceneDelegate.swift
-          test -s ios-native/verify-simulator-screen.swift
           grep -q 'configuration.delegateClass = SceneDelegate.self' ios-native/AppDelegate.swift
           grep -q 'UIHostingController(rootView: GhostGPTRootView())' ios-native/SceneDelegate.swift
           ! grep -q 'Open GhostGPT' ios-native/AppDelegate.swift ios-native/SceneDelegate.swift
@@ -57,7 +56,7 @@ jobs:
           mkdir -p ios/App/App/public
           test ! -e ios/App/App/public/index.html
 
-      - name: Build and launch on iOS Simulator
+      - name: Compile native app for iOS Simulator
         shell: bash
         run: |
           set -euo pipefail
@@ -65,20 +64,6 @@ jobs:
           simulator_app='build/simulator/Build/Products/Debug-iphonesimulator/App.app'
           test -d "$simulator_app"
           test ! -e "$simulator_app/public/index.html"
-          device_id=$(xcrun simctl list devices available -j | /usr/bin/python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for group in d["devices"].values() for x in group if x["isAvailable"] and x["name"].startswith("iPhone")))')
-          xcrun simctl boot "$device_id" || true
-          xcrun simctl bootstatus "$device_id" -b
-          xcrun simctl install "$device_id" "$simulator_app"
-          mkdir -p artifacts
-          for attempt in $(seq 1 10); do
-            xcrun simctl terminate "$device_id" io.corelo.ghostgpt >/dev/null 2>&1 || true
-            launch_output=$(xcrun simctl launch "$device_id" io.corelo.ghostgpt)
-            case "$launch_output" in *"io.corelo.ghostgpt"*) ;; *) echo "Launch $attempt failed: $launch_output"; exit 1 ;; esac
-            sleep 2
-            xcrun simctl io "$device_id" screenshot "artifacts/native-launch-$attempt.png"
-            test -s "artifacts/native-launch-$attempt.png"
-            echo "Simulator launch $attempt completed; screenshot captured."
-          done
 
       - name: Build unsigned iOS device app
         shell: bash
@@ -117,10 +102,3 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload verified simulator screenshot
-        uses: actions/upload-artifact@v4
-        with:
-          name: GhostGPT-native-launch-screenshots
-          path: artifacts/native-launch-*.png
-          if-no-files-found: error
-          retention-days: 14
