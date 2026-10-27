@@ -35,3 +35,12 @@ The IPA is unsigned and is not ready for direct installation on a standard iPhon
 ## Chat history
 
 Recent conversations are stored locally in the app using iOS app storage. The Chats sheet lists the latest 50 conversations and lets you reopen one or start a new chat. Conversation titles use the first user message, truncated for display. This is device-local history; it is not synchronized across devices or uploaded as a cloud archive.
+
+## Current usability and reliability improvements
+
+- Chat history is stored locally (up to 50 recent conversations), searchable by title or message text, and supports reopening, deleting individual conversations, clearing all saved chats with confirmation, and copying a JSON backup to the clipboard.
+- Assistant replies include a one-tap copy action.
+- The built-in browser has back/forward controls, loading progress, reload, home, and copy-URL actions. Navigation only accepts HTTP/HTTPS URLs; other schemes are rejected, and search terms are encoded as URL query parameters.
+- The chat history Done button dismisses the sheet without starting a new conversation.
+
+These changes are source-committed; a successful fresh CI build and physical-device validation are still required before treating the latest revision as release-ready.
