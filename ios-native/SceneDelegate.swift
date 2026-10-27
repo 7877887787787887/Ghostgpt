@@ -663,6 +663,7 @@ struct TerminalGatewaySettingsView: View {
 
 struct ChatHistorySheet: View {
     let onNewChat: () -> Void
+    @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             List {
@@ -675,7 +676,7 @@ struct ChatHistorySheet: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("Chats")
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { onNewChat() } } }
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }.presentationDetents([.medium, .large])
     }
 }
