@@ -8,6 +8,13 @@ struct ChatMessage: Identifiable, Codable {
     let isUser: Bool
 }
 
+struct ChatSession: Identifiable, Codable {
+    var id: UUID
+    var title: String
+    var messages: [ChatMessage]
+    var updatedAt: Date
+}
+
 struct AIReply: Decodable { let reply: String }
 struct AIError: Decodable { let error: String }
 struct OllamaTags: Decodable { struct Model: Decodable { let name: String }; let models: [Model] }
@@ -71,6 +78,7 @@ struct ChatView: View {
     @AppStorage("savedChatsJSON") private var savedChatsJSON = "[]"
     @State private var draft = ""
     @State private var messages: [ChatMessage] = []
+    @State private var currentChatID = UUID()
     @State private var isConnecting = false
     @State private var errorText: String?
     @State private var showingTools = false
@@ -237,12 +245,24 @@ struct ChatView: View {
         }
         .background(Color(uiColor: .systemBackground))
         .toolbar(.hidden, for: .navigationBar)
+        .onChange(of: messages.count) { _ in persistCurrentChat() }
         .sheet(isPresented: $showingHistory) {
-            ChatHistorySheet(onNewChat: {
-                messages = []
-                errorText = nil
-                showingHistory = false
-            })
+            ChatHistorySheet(
+                savedChatsJSON: savedChatsJSON,
+                onNewChat: {
+                    persistCurrentChat()
+                    currentChatID = UUID()
+                    messages = []
+                    errorText = nil
+                    showingHistory = false
+                },
+                onSelect: { session in
+                    currentChatID = session.id
+                    messages = session.messages
+                    errorText = nil
+                    showingHistory = false
+                }
+            )
         }
         .sheet(item: $activeTool) { tool in
             NavigationStack {
@@ -275,6 +295,24 @@ struct ChatView: View {
                         .padding(.horizontal, 12).padding(.vertical, 10).background(.white.opacity(0.07), in: Capsule())
                 }
             }.padding(.horizontal, 3)
+        }
+    }
+
+    private func persistCurrentChat() {
+        guard !messages.isEmpty,
+              let data = savedChatsJSON.data(using: .utf8) else { return }
+        var sessions = (try? JSONDecoder().decode([ChatSession].self, from: data)) ?? []
+        let title = messages.first(where: { $0.isUser })?.text ?? "New chat"
+        let session = ChatSession(id: currentChatID, title: String(title.prefix(64)), messages: messages, updatedAt: Date())
+        if let index = sessions.firstIndex(where: { $0.id == currentChatID }) {
+            sessions[index] = session
+        } else {
+            sessions.insert(session, at: 0)
+        }
+        sessions.sort { $0.updatedAt > $1.updatedAt }
+        sessions = Array(sessions.prefix(50))
+        if let encoded = try? JSONEncoder().encode(sessions) {
+            savedChatsJSON = String(data: encoded, encoding: .utf8) ?? "[]"
         }
     }
 
@@ -662,18 +700,37 @@ struct TerminalGatewaySettingsView: View {
 }
 
 struct ChatHistorySheet: View {
+    let savedChatsJSON: String
     let onNewChat: () -> Void
+    let onSelect: (ChatSession) -> Void
     @Environment(\.dismiss) private var dismiss
+
+    private var sessions: [ChatSession] {
+        guard let data = savedChatsJSON.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([ChatSession].self, from: data)) ?? []
+    }
+
     var body: some View {
         NavigationStack {
             List {
                 Section {
                     Button(action: onNewChat) { Label("New chat", systemImage: "square.and.pencil") }
                 }
-                Section("Workspace") {
-                    Label("GhostGPT", systemImage: "sparkles")
-                    Text("Conversation history is kept in this session for now. Persistent cloud history requires service-side support.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                Section("Saved conversations") {
+                    if sessions.isEmpty {
+                        Text("Your conversations will appear here automatically.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(sessions) { session in
+                            Button { onSelect(session) } label: {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(session.title).font(.body).lineLimit(2)
+                                    Text("\(session.messages.count) messages · \(session.updatedAt.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }.frame(maxWidth: .infinity, alignment: .leading)
+                            }.buttonStyle(.plain)
+                        }
+                    }
                 }
             }.navigationTitle("Chats")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
