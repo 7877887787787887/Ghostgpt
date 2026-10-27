@@ -191,8 +191,8 @@ class GatewayAuthenticationTests(unittest.TestCase):
         payload = {"mode": "powershell", "host": "msi", "command": "Get-Process", "approved": True, "riskConfirmed": False}
         handler = self._terminal_handler(payload)
         result = __import__("subprocess").CompletedProcess(["powershell.exe"], 0, "process list", "")
-        with patch.object(gateway, "IS_WINDOWS", True), \\
-             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \\
+        with patch.object(gateway, "IS_WINDOWS", True), \
+             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \
              patch.object(gateway.subprocess, "run", return_value=result) as run:
             gateway.Handler.do_POST(handler)
         self.assertEqual(handler.responses[0][0], 200)
@@ -207,8 +207,8 @@ class GatewayAuthenticationTests(unittest.TestCase):
         compound = self._terminal_handler({
             "mode": "powershell", "host": "msi", "command": "Get-Process; Remove-Item C:\\temp", "approved": True
         })
-        with patch.object(gateway, "IS_WINDOWS", True), \\
-             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \\
+        with patch.object(gateway, "IS_WINDOWS", True), \
+             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \
              patch.object(gateway.subprocess, "run", side_effect=AssertionError("must not execute")):
             gateway.Handler.do_POST(unknown_host)
             gateway.Handler.do_POST(compound)
@@ -220,9 +220,9 @@ class GatewayAuthenticationTests(unittest.TestCase):
         no_second_confirmation = self._terminal_handler({**base, "riskConfirmed": False})
         confirmed = self._terminal_handler({**base, "riskConfirmed": True})
         result = __import__("subprocess").CompletedProcess(["powershell.exe"], 0, "", "")
-        with patch.object(gateway, "IS_WINDOWS", True), \\
-             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \\
-             patch.dict(os.environ, {"GHOSTGPT_ALLOW_MODIFYING_COMMANDS": ""}), \\
+        with patch.object(gateway, "IS_WINDOWS", True), \
+             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \
+             patch.dict(os.environ, {"GHOSTGPT_ALLOW_MODIFYING_COMMANDS": ""}), \
              patch.object(gateway.subprocess, "run", side_effect=AssertionError("modifying commands are disabled")):
             gateway.Handler.do_POST(no_second_confirmation)
             gateway.Handler.do_POST(confirmed)
@@ -230,9 +230,9 @@ class GatewayAuthenticationTests(unittest.TestCase):
         self.assertEqual(confirmed.responses[0][0], 403)
 
         confirmed = self._terminal_handler({**base, "riskConfirmed": True})
-        with patch.object(gateway, "IS_WINDOWS", True), \\
-             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \\
-             patch.dict(os.environ, {"GHOSTGPT_ALLOW_MODIFYING_COMMANDS": "1"}), \\
+        with patch.object(gateway, "IS_WINDOWS", True), \
+             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \
+             patch.dict(os.environ, {"GHOSTGPT_ALLOW_MODIFYING_COMMANDS": "1"}), \
              patch.object(gateway.subprocess, "run", return_value=result) as run:
             gateway.Handler.do_POST(confirmed)
         self.assertEqual(confirmed.responses[0][0], 200)
