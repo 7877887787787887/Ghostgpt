@@ -18,7 +18,7 @@ In the iPhone app, open **Settings → Terminal gateway (PowerShell / SSH)**:
 - Endpoint: `https://msi.tail28f016.ts.net:10000/terminal`
 - Bearer token: the content of `C:\Users\Administrator\ghost-command-center\ghostgpt-gateway\gateway.token` on the PC
 
-For local model access, open **Settings → AI models and local model scan** and use base endpoint `https://msi.tail28f016.ts.net:10000` with the same bearer token.
+For local model access, open **Settings → AI models and local model scan** and use base endpoint `https://msi.tail28f016.ts.net:10000`. The LM Studio gateway now requires a bearer token for every route, including health, model inventory, startup, and inference. Place a high-entropy token in a `gateway.token` file beside `lmstudio_gateway.py` on the PC, or set `GHOSTGPT_GATEWAY_TOKEN` / `GHOSTGPT_GATEWAY_TOKEN_FILE`; keep the token file outside source control and restrict its Windows ACL. Enter the same token in the app's **AI models** API-key field. An unconfigured gateway fails closed with HTTP 503, and an invalid token receives HTTP 401. The token is not forwarded to LM Studio upstream.
 
 The iPhone must be connected to the same Tailscale tailnet. The gateway validates a bearer token, limits PowerShell to the PC alias (`msi`/localhost), restricts SSH to configured host aliases, and does not expose a raw shell port. AI-generated terminal commands are drafts: review them before pressing Run. Do not share the bearer token or publish this gateway to the public internet.
 

@@ -41,18 +41,19 @@ jobs:
           grep -q 'private func checkGatewayConnection' ios-native/SceneDelegate.swift
           grep -q 'private func executeApprovedStep' ios-native/SceneDelegate.swift
           grep -q 'confirmationDialog("Run a potentially risky PowerShell command?"' ios-native/SceneDelegate.swift
+          grep -q 'def authorize_request' windows/lmstudio_gateway.py
+          grep -q 'hmac.compare_digest' windows/lmstudio_gateway.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
 
-      - name: Verify Cloudflare AI response
+      - name: Test authenticated Windows model gateway
         shell: bash
         run: |
           set -euo pipefail
-          response=$(curl -fsS --retry 1 --max-time 20 -X POST 'https://ghostgpt-ai.conman31115.workers.dev/chat' -H 'Content-Type: application/json' --data '{"message":"Reply with exactly: Cloudflare AI verified"}')
-          echo "$response" | grep -q 'Cloudflare AI verified'
+          python3 -m unittest discover -s tests -v
 
       - name: Generate Capacitor iOS project
         run: |

@@ -445,9 +445,11 @@ struct ChatView: View {
     }
 
     private func ensurePCModelReady(base: URL) async throws {
+        let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
         var startRequest = URLRequest(url: base.appendingPathComponent("control/start"))
         startRequest.httpMethod = "POST"
         startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !apiKey.isEmpty { startRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         startRequest.timeoutInterval = 90
         startRequest.httpBody = Data("{}".utf8)
         let (startData, startResponse) = try await URLSession.shared.data(for: startRequest)
@@ -458,6 +460,7 @@ struct ChatView: View {
         }
 
         var modelsRequest = URLRequest(url: base.appendingPathComponent("v1/models"))
+        if !apiKey.isEmpty { modelsRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         modelsRequest.timeoutInterval = 15
         let (modelsData, modelsResponse) = try await URLSession.shared.data(for: modelsRequest)
         guard let modelsHTTP = modelsResponse as? HTTPURLResponse,
@@ -1290,6 +1293,7 @@ struct PCModelServerSettingsView: View {
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
     @AppStorage("autoStartPCModel") private var autoStartPCModel = true
     @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
+    @State private var localModelAPIKey = KeychainStore.migratedValue(for: "localModelAPIKey")
     @State private var busy = false
     @State private var status = "Checking the PC model server has not been run yet."
 
@@ -1302,6 +1306,10 @@ struct PCModelServerSettingsView: View {
                 Toggle("Start automatically when GhostGPT opens", isOn: $autoStartPCModel)
                 TextField("Private HTTPS PC endpoint", text: $localModelEndpoint)
                     .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
+                SecureField("Gateway bearer token", text: $localModelAPIKey)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Text("Use the gateway token configured on the PC. It is stored in iOS Keychain.")
+                    .font(.footnote).foregroundStyle(.secondary)
                 Text("Default model: \(localModelID)")
                     .font(.footnote).foregroundStyle(.secondary)
             }
@@ -1325,6 +1333,7 @@ struct PCModelServerSettingsView: View {
         }
         .navigationTitle("PC model server")
         .onAppear { Task { await refreshStatus() } }
+        .onChange(of: localModelAPIKey) { _, value in _ = KeychainStore.save(value, for: "localModelAPIKey") }
     }
 
     private func endpoint() -> URL? {
@@ -1342,6 +1351,8 @@ struct PCModelServerSettingsView: View {
         defer { busy = false }
         do {
             var request = URLRequest(url: base.appendingPathComponent("control/status"))
+            let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
+            if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
             request.timeoutInterval = 12
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
@@ -1368,6 +1379,8 @@ struct PCModelServerSettingsView: View {
             var request = URLRequest(url: base.appendingPathComponent("control/start"))
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
+            if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
             request.httpBody = Data("{}".utf8)
             request.timeoutInterval = 90
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -1443,9 +1456,11 @@ struct LocalModelsSettingsView: View {
         loading = true
         defer { loading = false }
         do {
+            let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
             var startRequest = URLRequest(url: base.appendingPathComponent("control/start"))
             startRequest.httpMethod = "POST"
             startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if !apiKey.isEmpty { startRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
             startRequest.httpBody = Data("{}".utf8)
             startRequest.timeoutInterval = 90
             let (startData, startResponse) = try await URLSession.shared.data(for: startRequest)
@@ -1456,8 +1471,7 @@ struct LocalModelsSettingsView: View {
             let path = "v1/models"
             var request = URLRequest(url: base.appendingPathComponent(path))
             request.timeoutInterval = 12
-        let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
-        if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+            if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
             guard (200..<300).contains(http.statusCode) else {

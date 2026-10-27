@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Private loopback gateway for GhostGPT -> LM Studio on this Windows PC."""
 from __future__ import annotations
-import http.client, json, logging, os, subprocess, threading, time
+import hmac, http.client, json, logging, os, subprocess, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -15,6 +15,19 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(filename=str(LOG_DIR / "lmstudio-gateway.log"), level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")
 start_lock = threading.Lock()
+MAX_BODY_BYTES = 8 * 1024 * 1024
+
+def load_gateway_token():
+    token = os.environ.get("GHOSTGPT_GATEWAY_TOKEN", "").strip()
+    if token:
+        return token
+    token_path = Path(os.environ.get(
+        "GHOSTGPT_GATEWAY_TOKEN_FILE", str(Path(__file__).resolve().with_name("gateway.token"))
+    ))
+    try:
+        return token_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 def get_models(timeout=5.0):
     req = Request(f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}/v1/models",
@@ -76,7 +89,22 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
         self.close_connection = True
+    def authorize_request(self):
+        expected = load_gateway_token()
+        if not expected:
+            logging.error("Rejected request: gateway bearer token is not configured")
+            self.send_json(503, {"error": "Gateway authentication is not configured"})
+            return False
+        authorization = self.headers.get("Authorization", "")
+        scheme, separator, supplied = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not separator or not hmac.compare_digest(supplied, expected):
+            self.send_json(401, {"error": "Unauthorized"})
+            return False
+        return True
+
     def do_GET(self):
+        if not self.authorize_request():
+            return
         path = urlsplit(self.path).path
         if path == "/health":
             try:
@@ -97,6 +125,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_json(404, {"error": "Not found"})
     def do_POST(self):
+        if not self.authorize_request():
+            return
         path = urlsplit(self.path).path
         if path == "/control/start":
             try:
@@ -117,9 +147,24 @@ class Handler(BaseHTTPRequestHandler):
             return
         conn = None
         try:
-            n = int(self.headers.get("Content-Length", "0") or "0")
+            raw_length = self.headers.get("Content-Length", "0") or "0"
+            try:
+                n = int(raw_length)
+            except ValueError:
+                self.send_json(400, {"error": "Invalid Content-Length"})
+                return
+            if n < 0:
+                self.send_json(400, {"error": "Invalid Content-Length"})
+                return
+            if n > MAX_BODY_BYTES:
+                self.send_json(413, {"error": "Request body exceeds the gateway limit"})
+                return
             body = self.rfile.read(n) if n > 0 else None
-            headers = {h: self.headers[h] for h in ("Content-Type", "Accept", "Authorization", "OpenAI-Organization") if self.headers.get(h)}
+            if n > 0 and len(body) != n:
+                self.send_json(400, {"error": "Incomplete request body"})
+                return
+            # The gateway bearer token authenticates this hop only; never forward it to LM Studio.
+            headers = {h: self.headers[h] for h in ("Content-Type", "Accept", "OpenAI-Organization") if self.headers.get(h)}
             conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=185)
             conn.request(self.command, self.path, body=body, headers=headers)
             response = conn.getresponse()
