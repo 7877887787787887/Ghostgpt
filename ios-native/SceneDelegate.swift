@@ -541,7 +541,8 @@ struct TerminalGatewayView: View {
                         .textFieldStyle(.roundedBorder).lineLimit(1...4)
                     Button { Task { await execute() } } label: {
                         Image(systemName: running ? "hourglass" : "arrow.up.circle.fill").font(.title)
-                    }.disabled(running || command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || host.isEmpty)
+                    }.accessibilityLabel("Run reviewed command")
+                     .disabled(running || command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || host.isEmpty)
                 }
                 TextField("Describe a task for AI to draft a command…", text: $taskDescription, axis: .vertical)
                     .textFieldStyle(.roundedBorder).lineLimit(1...3)
@@ -559,6 +560,7 @@ struct TerminalGatewayView: View {
                 .font(.caption2).foregroundStyle(.secondary)
         }.padding()
             .navigationTitle(mode == "ssh" ? "SSH" : "PowerShell")
+            .onAppear { if host.isEmpty { host = mode == "ssh" ? "raspberrypi" : "msi" } }
             .sheet(isPresented: $showingSettings) {
                 NavigationStack { TerminalGatewaySettingsView().toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingSettings = false } } } }
             }
