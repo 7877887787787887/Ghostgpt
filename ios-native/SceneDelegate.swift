@@ -65,7 +65,7 @@ struct ChatView: View {
     @AppStorage("speedMode") private var speedMode = "Balanced"
     @AppStorage("modelProvider") private var modelProvider = "Cloudflare"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
-    @AppStorage("localModelID") private var localModelID = "qwen3.5:9b"
+    @AppStorage("localModelID") private var localModelID = "gps-qwen3-fast-8b:latest"
     @AppStorage("localModelAPIKey") private var localModelAPIKey = ""
     @AppStorage("enabledToolsJSON") private var enabledToolsJSON = "[\"Browser\"]"
     @AppStorage("savedChatsJSON") private var savedChatsJSON = "[]"
@@ -339,8 +339,9 @@ struct ChatView: View {
             request.httpBody = try JSONSerialization.data(withJSONObject: [
                 "model": localModelID,
                 "stream": false,
+                "think": false,
                 "messages": history,
-                "options": ["num_predict": speedMode == "Fast" ? 128 : 512, "num_ctx": 8192]
+                "options": ["num_predict": speedMode == "Fast" ? 128 : 512, "num_ctx": 4096]
             ])
         } else {
             request.httpBody = try JSONSerialization.data(withJSONObject: [
@@ -707,7 +708,7 @@ struct SettingsView: View {
 struct LocalModelsSettingsView: View {
     @AppStorage("modelProvider") private var modelProvider = "Cloudflare"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
-    @AppStorage("localModelID") private var localModelID = "qwen3.5:9b"
+    @AppStorage("localModelID") private var localModelID = "gps-qwen3-fast-8b:latest"
     @AppStorage("localModelAPIKey") private var localModelAPIKey = ""
     @State private var availableModels: [String] = []
     @State private var status = "Model inventory has not been checked."
