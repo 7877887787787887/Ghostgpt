@@ -856,8 +856,21 @@ struct TerminalGatewayView: View {
     @State private var drafting = false
     @AppStorage("speedMode") private var speedMode = "Balanced"
     @State private var showingSettings = false
+    @State private var showingRiskConfirmation = false
     @State private var checkingGateway = false
     @State private var gatewayStatus = "Not checked yet."
+    private var manualCommandIsRisky: Bool {
+        let lowered = command.lowercased()
+        let markers = [
+            "set-", "new-", "remove-", "add-", "clear-", "format-", "restart-",
+            "stop-", "start-", "enable-", "disable-", "move-item", "copy-item",
+            "rename-item", "out-file", "set-content", "add-content", "reg add",
+            "reg delete", "net user", "sc config", "shutdown", "taskkill",
+            "install-", "uninstall-", "invoke-expression", "iex ", "-encodedcommand"
+        ]
+        return markers.contains { lowered.contains($0) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label(mode == "ssh" ? "SSH terminal" : "PowerShell terminal", systemImage: mode == "ssh" ? "server.rack" : "terminal")
@@ -881,7 +894,13 @@ struct TerminalGatewayView: View {
                 HStack(spacing: 8) {
                     TextField(mode == "ssh" ? "Command to run…" : "PowerShell command…", text: $command, axis: .vertical)
                         .textFieldStyle(.roundedBorder).lineLimit(1...4)
-                    Button { Task { await execute() } } label: {
+                    Button {
+                        if manualCommandIsRisky {
+                            showingRiskConfirmation = true
+                        } else {
+                            Task { await execute(riskConfirmed: false) }
+                        }
+                    } label: {
                         Image(systemName: running ? "hourglass" : "arrow.up.circle.fill").font(.title)
                     }.accessibilityLabel("Run reviewed command")
                      .disabled(running || command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || host.isEmpty)
@@ -918,6 +937,12 @@ struct TerminalGatewayView: View {
             }
             .sheet(isPresented: $showingSettings) {
                 NavigationStack { TerminalGatewaySettingsView().toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingSettings = false } } } }
+            }
+            .confirmationDialog("Run a potentially risky terminal command?", isPresented: $showingRiskConfirmation, titleVisibility: .visible) {
+                Button("Run risky command", role: .destructive) { Task { await execute(riskConfirmed: true) } }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("The command may modify the PC. Review it carefully before confirming.")
             }
     }
 
@@ -981,7 +1006,7 @@ struct TerminalGatewayView: View {
         }
     }
 
-    private func execute() async {
+    private func execute(riskConfirmed: Bool = false) async {
         guard let base = URL(string: gatewayURL), base.scheme == "https" else {
             output = "Gateway URL must be a valid HTTPS address."
             return
@@ -996,9 +1021,10 @@ struct TerminalGatewayView: View {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let gatewayToken = KeychainStore.migratedValue(for: "terminalGatewayToken")
             if !gatewayToken.isEmpty { request.setValue("Bearer \(gatewayToken)", forHTTPHeaderField: "Authorization") }
-            request.timeoutInterval = 30
+            request.timeoutInterval = 65
             request.httpBody = try JSONSerialization.data(withJSONObject: [
-                "mode": mode, "host": host, "username": username, "command": submitted
+                "mode": mode, "host": host, "username": username, "command": submitted,
+                "approved": true, "riskConfirmed": riskConfirmed
             ])
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
@@ -1591,7 +1617,10 @@ struct AgentWorkspaceView: View {
         let markers = [
             "remove-item", "clear-content", "format-volume", "format-disk",
             "restart-computer", "stop-computer", "shutdown", "set-executionpolicy",
-            "disable-", "reg delete", "invoke-expression", "iex ", "remove-"
+            "disable-", "reg delete", "reg add", "invoke-expression", "iex ", "remove-",
+            "set-content", "add-content", "new-item", "copy-item", "move-item",
+            "rename-item", "set-service", "restart-service", "start-service",
+            "stop-service", "set-itemproperty", "start-process", "install-", "uninstall-"
         ]
         return markers.contains { command.contains($0) }
     }
@@ -1695,7 +1724,7 @@ struct AgentWorkspaceView: View {
             savedLogJSON = String(data: (try? JSONEncoder().encode(Array(value.prefix(100)))) ?? Data("[]".utf8), encoding: .utf8) ?? "[]"
         }
         .confirmationDialog("Run a potentially risky PowerShell command?", isPresented: $showingRiskConfirmation, titleVisibility: .visible) {
-            Button("Run risky command", role: .destructive) { Task { await executeApprovedStep() } }
+            Button("Run risky command", role: .destructive) { Task { await executeApprovedStep(riskConfirmed: true) } }
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("The proposed command may change the remote computer. Review the command carefully before confirming.")
@@ -1793,7 +1822,7 @@ struct AgentWorkspaceView: View {
     }
 
     @MainActor
-    private func executeApprovedStep() async {
+    private func executeApprovedStep(riskConfirmed: Bool = false) async {
         let submitted = proposedCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !submitted.isEmpty, !remoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard let url = URL(string: gatewayURL.trimmingCharacters(in: .whitespacesAndNewlines)), url.scheme == "https", url.host != nil else {
@@ -1808,12 +1837,14 @@ struct AgentWorkspaceView: View {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let token = KeychainStore.migratedValue(for: "terminalGatewayToken")
             if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-            request.timeoutInterval = 60
+            request.timeoutInterval = 65
             request.httpBody = try JSONSerialization.data(withJSONObject: [
                 "mode": "powershell",
                 "host": remoteHost,
                 "username": remoteUsername,
-                "command": submitted
+                "command": submitted,
+                "approved": true,
+                "riskConfirmed": riskConfirmed
             ])
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }

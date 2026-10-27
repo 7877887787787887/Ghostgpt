@@ -47,6 +47,10 @@ jobs:
           grep -q 'confirmationDialog("Run a potentially risky PowerShell command?"' ios-native/SceneDelegate.swift
           grep -q 'def authorize_request' windows/lmstudio_gateway.py
           grep -q 'hmac.compare_digest' windows/lmstudio_gateway.py
+          grep -q 'def handle_terminal' windows/lmstudio_gateway.py
+          grep -q 'def do_HEAD' windows/lmstudio_gateway.py
+          grep -q 'riskConfirmed' windows/lmstudio_gateway.py
+          grep -q '"approved": true' ios-native/SceneDelegate.swift
 
       - name: Set up Node.js
         uses: actions/setup-node@v5

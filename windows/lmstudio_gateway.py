@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Private loopback gateway for GhostGPT -> LM Studio on this Windows PC."""
 from __future__ import annotations
-import hmac, http.client, json, logging, os, subprocess, threading, time
+import getpass, hashlib, hmac, http.client, json, logging, os, shutil, subprocess, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -16,6 +16,54 @@ logging.basicConfig(filename=str(LOG_DIR / "lmstudio-gateway.log"), level=loggin
                     format="%(asctime)s %(levelname)s %(message)s")
 start_lock = threading.Lock()
 MAX_BODY_BYTES = 8 * 1024 * 1024
+MAX_TERMINAL_BODY_BYTES = 64 * 1024
+MAX_TERMINAL_OUTPUT_CHARS = 16 * 1024
+IS_WINDOWS = os.name == "nt"
+
+READ_ONLY_COMMANDS = {
+    "get-process", "get-service", "get-computerinfo", "get-childitem", "get-content",
+    "get-command", "get-nettcpconnection", "test-connection", "get-ciminstance",
+    "get-winevent", "get-eventlog", "get-scheduledtask", "get-scheduledtaskinfo",
+    "get-executionpolicy", "get-itemproperty", "get-location", "get-date", "get-volume",
+    "get-physicaldisk", "get-disk", "get-partition", "get-psdrive", "get-netipconfiguration",
+    "get-netadapter", "get-localuser", "get-localgroup", "get-localgroupmember",
+    "get-module", "get-filehash", "get-authenticodesignature", "hostname", "whoami",
+    "ipconfig", "systeminfo", "tasklist", "netstat", "ping", "where.exe", "ver",
+}
+BLOCKED_COMMAND_MARKERS = (
+    "-encodedcommand", "frombase64string", "invoke-expression", "iex ",
+    "scriptblock::create", "downloadstring", "downloadfile", "webclient",
+    "invoke-webrequest", "start-bitstransfer", "convertfrom-securestring",
+    "get-credential", "credentialmanager",
+)
+RISKY_COMMAND_MARKERS = (
+    "set-", "new-", "remove-", "add-", "clear-", "format-", "restart-", "stop-",
+    "start-", "enable-", "disable-", "move-item", "copy-item", "rename-item",
+    "out-file", "set-content", "add-content", "reg add", "reg delete", "net user",
+    "sc config", "shutdown", "taskkill", "install-", "uninstall-",
+)
+COMPOUND_COMMAND_MARKERS = (";", "|", "\n", "\r", "&&", "||", "`", "<", ">", "&")
+
+def powershell_executable():
+    if not IS_WINDOWS:
+        return ""
+    configured = os.environ.get("GHOSTGPT_POWERSHELL_EXE", "powershell.exe").strip() or "powershell.exe"
+    candidate = Path(configured)
+    if candidate.is_absolute() and candidate.is_file():
+        return str(candidate)
+    return shutil.which(configured) or ""
+
+def allowed_powershell_hosts():
+    raw = os.environ.get("GHOSTGPT_POWERSHELL_HOSTS", "msi,localhost,127.0.0.1")
+    hosts = {item.strip().casefold() for item in raw.split(",") if item.strip()}
+    computer_name = os.environ.get("COMPUTERNAME", "").strip().casefold()
+    if computer_name:
+        hosts.add(computer_name)
+    return hosts
+
+def command_is_risky(command):
+    lowered = command.casefold()
+    return any(marker in lowered for marker in RISKY_COMMAND_MARKERS)
 
 def load_gateway_token():
     token = os.environ.get("GHOSTGPT_GATEWAY_TOKEN", "").strip()
@@ -87,7 +135,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(payload)
+        if getattr(self, "command", "") != "HEAD":
+            self.wfile.write(payload)
         self.close_connection = True
     def authorize_request(self):
         expected = load_gateway_token()
@@ -102,10 +151,37 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def do_HEAD(self):
+        if not self.authorize_request():
+            return
+        path = urlsplit(self.path).path
+        if path == "/terminal":
+            ready = bool(powershell_executable())
+            self.send_response(200 if ready else 503)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            return
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
     def do_GET(self):
         if not self.authorize_request():
             return
         path = urlsplit(self.path).path
+        if path == "/terminal/health":
+            ready = bool(powershell_executable())
+            self.send_json(200 if ready else 503, {
+                "ok": ready, "service": "PowerShell on this PC",
+                "ready": ready, "modifying_commands_enabled":
+                    os.environ.get("GHOSTGPT_ALLOW_MODIFYING_COMMANDS", "").strip() == "1"
+            })
+            return
         if path == "/health":
             try:
                 models = get_models(timeout=3)
@@ -137,10 +213,124 @@ class Handler(BaseHTTPRequestHandler):
                 logging.exception("Unable to start LM Studio")
                 self.send_json(503, {"ok": False, "ready": False, "error": str(exc)})
             return
+        if path == "/terminal":
+            self.handle_terminal()
+            return
         if path.startswith("/v1/") or path == "/v1":
             self.proxy_to_lmstudio()
             return
         self.send_json(404, {"error": "Not found"})
+
+    def read_json_body(self, limit):
+        raw_length = self.headers.get("Content-Length", "0") or "0"
+        try:
+            length = int(raw_length)
+        except ValueError:
+            self.send_json(400, {"error": "Invalid Content-Length"})
+            return None
+        if length < 0:
+            self.send_json(400, {"error": "Invalid Content-Length"})
+            return None
+        if length > limit:
+            self.send_json(413, {"error": "Request body exceeds the terminal gateway limit"})
+            return None
+        raw = self.rfile.read(length) if length else b""
+        if len(raw) != length:
+            self.send_json(400, {"error": "Incomplete request body"})
+            return None
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.send_json(400, {"error": "Request body must be valid JSON"})
+            return None
+        if not isinstance(payload, dict):
+            self.send_json(400, {"error": "Request body must be a JSON object"})
+            return None
+        return payload
+
+    def handle_terminal(self):
+        payload = self.read_json_body(MAX_TERMINAL_BODY_BYTES)
+        if payload is None:
+            return
+        if str(payload.get("mode", "")).casefold() != "powershell":
+            self.send_json(501, {"error": "This gateway supports PowerShell only; configure a separate SSH gateway."})
+            return
+        if payload.get("approved") is not True:
+            self.send_json(403, {"error": "Explicit user approval is required before command execution."})
+            return
+
+        host = str(payload.get("host", "")).strip().casefold()
+        if not host or host not in allowed_powershell_hosts():
+            self.send_json(403, {"error": "Target host is not in the local PowerShell allow-list."})
+            return
+        username = str(payload.get("username", "")).strip()
+        current_user = (os.environ.get("USERNAME") or getpass.getuser()).casefold()
+        if username and username.casefold() != current_user:
+            self.send_json(403, {"error": "This gateway cannot impersonate another Windows user."})
+            return
+
+        command = str(payload.get("command", "")).strip()
+        if not command or len(command) > 12000:
+            self.send_json(400, {"error": "Command is empty or exceeds the 12000-character limit."})
+            return
+        lowered = command.casefold()
+        if any(marker in lowered for marker in BLOCKED_COMMAND_MARKERS):
+            self.send_json(403, {"error": "Encoded, obfuscated, credential-oriented, and download/execute commands are blocked."})
+            return
+        if any(marker in command for marker in COMPOUND_COMMAND_MARKERS):
+            self.send_json(403, {"error": "Compound commands, pipelines, redirection, and multiline scripts are blocked by policy."})
+            return
+
+        root = command.split(None, 1)[0].casefold()
+        risky = command_is_risky(command)
+        if risky:
+            if payload.get("riskConfirmed") is not True:
+                self.send_json(403, {"error": "A second explicit confirmation is required for a modifying command."})
+                return
+            if os.environ.get("GHOSTGPT_ALLOW_MODIFYING_COMMANDS", "").strip() != "1":
+                self.send_json(403, {"error": "Modifying commands are disabled on this gateway. Enable them explicitly in the protected Windows service environment if required."})
+                return
+        elif root not in READ_ONLY_COMMANDS:
+            self.send_json(403, {"error": "Command is not on the read-only allow-list. Modifying commands require explicit confirmation and gateway opt-in."})
+            return
+
+        executable = powershell_executable()
+        if not executable:
+            self.send_json(503, {"error": "PowerShell is unavailable or this gateway is not running on Windows."})
+            return
+
+        try:
+            result = subprocess.run(
+                [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                 "$ErrorActionPreference = 'Stop';\n" + command],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, timeout=60, shell=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except subprocess.TimeoutExpired:
+            logging.warning("PowerShell command timed out host=%s root=%s risky=%s", host, root, risky)
+            self.send_json(504, {"error": "PowerShell command exceeded the 60-second execution limit."})
+            return
+        except Exception:
+            logging.exception("Unable to launch approved PowerShell command")
+            self.send_json(503, {"error": "PowerShell could not be started."})
+            return
+
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        truncated = len(stdout) > MAX_TERMINAL_OUTPUT_CHARS or len(stderr) > MAX_TERMINAL_OUTPUT_CHARS
+        digest = hashlib.sha256(command.encode("utf-8")).hexdigest()[:16]
+        logging.info("PowerShell execution host=%s user=%s root=%s risky=%s exit=%s command_sha256=%s",
+                     host, current_user, root, risky, result.returncode, digest)
+        self.send_json(200, {
+            "ok": result.returncode == 0,
+            "exit_code": result.returncode,
+            "stdout": stdout[:MAX_TERMINAL_OUTPUT_CHARS],
+            "stderr": stderr[:MAX_TERMINAL_OUTPUT_CHARS],
+            "truncated": truncated,
+            "risk": "changes" if risky else "read-only",
+        })
+
     def proxy_to_lmstudio(self):
         if not (urlsplit(self.path).path.startswith("/v1/") or urlsplit(self.path).path == "/v1"):
             self.send_json(404, {"error": "Only the /v1 API is proxied"})

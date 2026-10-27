@@ -33,6 +33,12 @@ class FakeHandler:
     def authorize_request(self):
         return gateway.Handler.authorize_request(self)
 
+    def read_json_body(self, limit):
+        return gateway.Handler.read_json_body(self, limit)
+
+    def handle_terminal(self):
+        return gateway.Handler.handle_terminal(self)
+
     def proxy_to_lmstudio(self):
         return gateway.Handler.proxy_to_lmstudio(self)
 
@@ -161,6 +167,91 @@ class GatewayAuthenticationTests(unittest.TestCase):
         self.assertEqual(handler.status, 200)
         self.assertNotIn("Authorization", connection.forwarded_headers)
 
+
+    def _terminal_handler(self, payload, token="correct-test-token"):
+        body = __import__("json").dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json", "Content-Length": str(len(body))}
+        if token:
+            headers["Authorization"] = "Bearer " + token
+        return FakeHandler(path="/terminal", headers=headers, method="POST", body=body)
+
+    def test_terminal_requires_bearer_and_explicit_approval(self):
+        payload = {"mode": "powershell", "host": "msi", "command": "Get-Process", "approved": True}
+        handler = self._terminal_handler(payload, token="")
+        with patch.object(gateway.subprocess, "run", side_effect=AssertionError("must not execute")):
+            gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.responses[0][0], 401)
+
+        handler = self._terminal_handler({**payload, "approved": False})
+        with patch.object(gateway.subprocess, "run", side_effect=AssertionError("must not execute")):
+            gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.responses[0][0], 403)
+
+    def test_terminal_runs_allowlisted_read_only_command_only_after_approval(self):
+        payload = {"mode": "powershell", "host": "msi", "command": "Get-Process", "approved": True, "riskConfirmed": False}
+        handler = self._terminal_handler(payload)
+        result = __import__("subprocess").CompletedProcess(["powershell.exe"], 0, "process list", "")
+        with patch.object(gateway, "IS_WINDOWS", True), \\
+             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \\
+             patch.object(gateway.subprocess, "run", return_value=result) as run:
+            gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.responses[0][0], 200)
+        self.assertEqual(handler.responses[0][1]["stdout"], "process list")
+        self.assertEqual(run.call_count, 1)
+        self.assertIn("Get-Process", run.call_args.args[0][-1])
+
+    def test_terminal_rejects_unknown_host_and_compound_commands(self):
+        unknown_host = self._terminal_handler({
+            "mode": "powershell", "host": "other-machine", "command": "Get-Process", "approved": True
+        })
+        compound = self._terminal_handler({
+            "mode": "powershell", "host": "msi", "command": "Get-Process; Remove-Item C:\\temp", "approved": True
+        })
+        with patch.object(gateway, "IS_WINDOWS", True), \\
+             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \\
+             patch.object(gateway.subprocess, "run", side_effect=AssertionError("must not execute")):
+            gateway.Handler.do_POST(unknown_host)
+            gateway.Handler.do_POST(compound)
+        self.assertEqual(unknown_host.responses[0][0], 403)
+        self.assertEqual(compound.responses[0][0], 403)
+
+    def test_terminal_modifying_command_needs_gateway_opt_in_and_second_confirmation(self):
+        base = {"mode": "powershell", "host": "msi", "command": "Restart-Computer", "approved": True}
+        no_second_confirmation = self._terminal_handler({**base, "riskConfirmed": False})
+        confirmed = self._terminal_handler({**base, "riskConfirmed": True})
+        result = __import__("subprocess").CompletedProcess(["powershell.exe"], 0, "", "")
+        with patch.object(gateway, "IS_WINDOWS", True), \\
+             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \\
+             patch.dict(os.environ, {"GHOSTGPT_ALLOW_MODIFYING_COMMANDS": ""}), \\
+             patch.object(gateway.subprocess, "run", side_effect=AssertionError("modifying commands are disabled")):
+            gateway.Handler.do_POST(no_second_confirmation)
+            gateway.Handler.do_POST(confirmed)
+        self.assertEqual(no_second_confirmation.responses[0][0], 403)
+        self.assertEqual(confirmed.responses[0][0], 403)
+
+        confirmed = self._terminal_handler({**base, "riskConfirmed": True})
+        with patch.object(gateway, "IS_WINDOWS", True), \\
+             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \\
+             patch.dict(os.environ, {"GHOSTGPT_ALLOW_MODIFYING_COMMANDS": "1"}), \\
+             patch.object(gateway.subprocess, "run", return_value=result) as run:
+            gateway.Handler.do_POST(confirmed)
+        self.assertEqual(confirmed.responses[0][0], 200)
+        run.assert_called_once()
+
+    def test_terminal_head_reports_power_shell_readiness_without_running_a_command(self):
+        handler = FakeHandler(path="/terminal", headers={"Authorization": "Bearer correct-test-token"}, method="HEAD")
+        with patch.object(gateway, "powershell_executable", return_value="powershell.exe"):
+            gateway.Handler.do_HEAD(handler)
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(handler.wfile.getvalue(), b"")
+
+    def test_terminal_gateway_explicitly_rejects_ssh_mode(self):
+        handler = self._terminal_handler({
+            "mode": "ssh", "host": "Ghost", "command": "whoami", "approved": True
+        })
+        with patch.object(gateway.subprocess, "run", side_effect=AssertionError("SSH must not execute here")):
+            gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.responses[0][0], 501)
 
     def test_ios_ai_routes_only_to_local_lm_studio(self):
         source = (ROOT / "ios-native" / "SceneDelegate.swift").read_text(encoding="utf-8")

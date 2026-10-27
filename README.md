@@ -8,7 +8,7 @@ GhostGPT uses **LM Studio on the Windows PC only** for chat, agent planning, and
 
 ## Private PC gateway
 
-The script `windows/lmstudio_gateway.py` implements the LM Studio proxy/control API and listens only on `127.0.0.1:8767`. Configure Tailscale Serve separately to expose that loopback service through a tailnet-only HTTPS endpoint such as `https://msi.tail28f016.ts.net:10000`. This repository does not install a Windows scheduled task or change Tailscale Serve settings automatically.
+The script `windows/lmstudio_gateway.py` implements the authenticated LM Studio proxy/control API and a PowerShell endpoint at `/terminal`; it listens only on `127.0.0.1:8767`. Configure Tailscale Serve separately to expose that loopback service through a tailnet-only HTTPS endpoint such as `https://msi.tail28f016.ts.net:10000`. This repository does not install a Windows scheduled task or change Tailscale Serve settings automatically. The authenticated `HEAD /terminal` readiness check verifies that PowerShell is available without running a command.
 
 In the iPhone app, open **Settings → Terminal gateway (PowerShell / SSH)**:
 - Endpoint: `https://msi.tail28f016.ts.net:10000/terminal`
@@ -16,7 +16,7 @@ In the iPhone app, open **Settings → Terminal gateway (PowerShell / SSH)**:
 
 For local model access, open **Settings → AI models and local model scan** and use base endpoint `https://msi.tail28f016.ts.net:10000`. The LM Studio gateway now requires a bearer token for every route, including health, model inventory, startup, and inference. Place a high-entropy token in a `gateway.token` file beside `lmstudio_gateway.py` on the PC, or set `GHOSTGPT_GATEWAY_TOKEN` / `GHOSTGPT_GATEWAY_TOKEN_FILE`; keep the token file outside source control and restrict its Windows ACL. Enter the same token in the app's **AI models** API-key field. An unconfigured gateway fails closed with HTTP 503, and an invalid token receives HTTP 401. The token is not forwarded to LM Studio upstream.
 
-The iPhone must be connected to the same Tailscale tailnet. The LM Studio proxy authenticates every request with a bearer token and does not forward that token to LM Studio. The PowerShell/SSH terminal UI uses a separate configured endpoint ending in `/terminal`; **`windows/lmstudio_gateway.py` does not implement `/terminal` or execute PowerShell/SSH**. Use a separately deployed terminal gateway that enforces its own bearer authentication, host/command allow-lists, approval checks for changes, and audit logs. Do not expose raw shell services to the public internet.
+The iPhone must be connected to the same Tailscale tailnet. Both model and PowerShell routes require the bearer token; the token is never forwarded to LM Studio. The PowerShell route accepts only the local PC aliases and the current Windows user, requires an explicit approval flag, restricts default commands to a read-only allow-list, blocks encoded/compound commands, limits execution to 60 seconds, and caps returned output. Modifying commands are disabled by default; enabling them requires `GHOSTGPT_ALLOW_MODIFYING_COMMANDS=1` in the protected gateway environment plus a second in-app confirmation. SSH mode is not implemented by this gateway and needs a separate SSH gateway. Do not expose raw shell services to the public internet.
 
 ## Browser and tool behavior
 
