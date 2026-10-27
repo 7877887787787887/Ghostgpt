@@ -364,7 +364,11 @@ struct ChatView: View {
                     let (data, response) = try await URLSession.shared.data(for: request)
                     guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
                     if (200..<300).contains(http.statusCode), let answer = try? JSONDecoder().decode(AIReply.self, from: data) {
-                        messages.append(ChatMessage(text: answer.reply, isUser: false))
+                        let cleanedReply = answer.reply.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !cleanedReply.isEmpty else {
+                            throw NSError(domain: "GhostGPT", code: 4, userInfo: [NSLocalizedDescriptionKey: "The AI service returned an empty reply. Retry the request or switch models."])
+                        }
+                        messages.append(ChatMessage(text: cleanedReply, isUser: false))
                     } else {
                         let serviceError = try? JSONDecoder().decode(AIError.self, from: data)
                         throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: serviceError?.error ?? "The AI service returned HTTP \(http.statusCode)."])
@@ -426,7 +430,11 @@ struct ChatView: View {
         } else {
             reply = try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message.content ?? "The local model returned an empty response."
         }
-        messages.append(ChatMessage(text: reply, isUser: false))
+        let cleanedReply = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedReply.isEmpty else {
+            throw NSError(domain: "GhostGPT", code: 5, userInfo: [NSLocalizedDescriptionKey: "The local model returned an empty reply. Check the model gateway or try another model."])
+        }
+        messages.append(ChatMessage(text: cleanedReply, isUser: false))
     }
 }
 
