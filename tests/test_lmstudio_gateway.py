@@ -162,5 +162,18 @@ class GatewayAuthenticationTests(unittest.TestCase):
         self.assertNotIn("Authorization", connection.forwarded_headers)
 
 
+    def test_ios_ai_routes_only_to_local_lm_studio(self):
+        source = (ROOT / "ios-native" / "SceneDelegate.swift").read_text(encoding="utf-8")
+        self.assertIn("enum LocalModelClient", source)
+        self.assertGreaterEqual(source.count("LocalModelClient.chat("), 3)
+        for forbidden in (
+            "ghostgpt-ai.conman31115.workers.dev",
+            "Cloudflare",
+            "Ollama",
+            "modelProvider",
+            "cloudflareEnabled",
+        ):
+            self.assertNotIn(forbidden, source)
+
 if __name__ == "__main__":
     unittest.main()

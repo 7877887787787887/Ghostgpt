@@ -16,12 +16,8 @@ struct ChatSession: Identifiable, Codable {
     var updatedAt: Date
 }
 
-struct AIReply: Decodable { let reply: String }
-struct AIError: Decodable { let error: String }
-struct OllamaTags: Decodable { struct Model: Decodable { let name: String }; let models: [Model] }
 struct OpenAIModels: Decodable { struct Model: Decodable { let id: String }; let data: [Model] }
 struct OpenAIChatResponse: Decodable { struct Choice: Decodable { struct Message: Decodable { let content: String }; let message: Message }; let choices: [Choice] }
-struct OllamaChatResponse: Decodable { let message: Message; struct Message: Decodable { let content: String } }
 
 enum KeychainStore {
     private static let service = Bundle.main.bundleIdentifier ?? "GhostGPT"
@@ -78,6 +74,94 @@ enum KeychainStore {
 }
 
 
+enum LocalModelClient {
+    static func chat(
+        endpoint: String,
+        model: String,
+        messages: [[String: String]],
+        maxTokens: Int,
+        timeout: TimeInterval
+    ) async throws -> String {
+        let cleaned = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let base = URL(string: cleaned), base.scheme == "https", base.host != nil else {
+            throw NSError(domain: "GhostGPT.LocalModel", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Configure a valid private HTTPS LM Studio gateway in Settings → AI models."
+            ])
+        }
+
+        let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
+        var startRequest = URLRequest(url: base.appendingPathComponent("control/start"))
+        startRequest.httpMethod = "POST"
+        startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !apiKey.isEmpty {
+            startRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        startRequest.httpBody = Data("{}".utf8)
+        startRequest.timeoutInterval = 90
+        let (startData, startResponse) = try await URLSession.shared.data(for: startRequest)
+        guard let startHTTP = startResponse as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(startHTTP.statusCode) else {
+            let detail = String(data: startData, encoding: .utf8) ?? "No details returned."
+            throw NSError(domain: "GhostGPT.LocalModel", code: startHTTP.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: "PC model gateway startup failed (HTTP \(startHTTP.statusCode)). Check the bearer token and LM Studio readiness. \(String(detail.prefix(800)))"
+            ])
+        }
+
+        let inventory = (try? JSONSerialization.jsonObject(with: startData)) as? [String: Any]
+        let modelIDs = inventory?["models"] as? [String] ?? []
+        guard !modelIDs.isEmpty else {
+            throw NSError(domain: "GhostGPT.LocalModel", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "The PC gateway is reachable but reports no loaded LM Studio models."
+            ])
+        }
+        let requestedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedModel: String
+        if modelIDs.contains(requestedModel) {
+            selectedModel = requestedModel
+        } else if modelIDs.contains("openai/gpt-oss-20b") {
+            selectedModel = "openai/gpt-oss-20b"
+        } else {
+            selectedModel = modelIDs.sorted().first ?? ""
+        }
+        guard !selectedModel.isEmpty else {
+            throw NSError(domain: "GhostGPT.LocalModel", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "No usable LM Studio model ID was returned by the gateway."
+            ])
+        }
+
+        var request = URLRequest(url: base.appendingPathComponent("v1/chat/completions"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        request.timeoutInterval = timeout
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": selectedModel,
+            "stream": false,
+            "messages": messages,
+            "max_tokens": maxTokens
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(http.statusCode) else {
+            let detail = String(data: data, encoding: .utf8) ?? "No details returned."
+            throw NSError(domain: "GhostGPT.LocalModel", code: http.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: "LM Studio returned HTTP \(http.statusCode). \(String(detail.prefix(1000)))"
+            ])
+        }
+        let decoded = try JSONDecoder().decode(OpenAIChatResponse.self, from: data)
+        let reply = decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !reply.isEmpty else {
+            throw NSError(domain: "GhostGPT.LocalModel", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "LM Studio returned an empty response."
+            ])
+        }
+        return reply
+    }
+}
+
 enum GhostTool: String, CaseIterable, Identifiable {
     case browser = "Browser"
     case powershell = "PowerShell"
@@ -124,13 +208,9 @@ struct GhostGPTRootView: View {
 }
 
 struct ChatView: View {
-    @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("speedMode") private var speedMode = "Balanced"
-    @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
     @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
-    @AppStorage("ollamaModelID") private var ollamaModelID = "openai/gpt-oss-20b"
-    @AppStorage("lmStudioModelID") private var lmStudioModelID = ""
     @AppStorage("autoStartPCModel") private var autoStartPCModel = true
     @AppStorage("enabledToolsJSON") private var enabledToolsJSON = "[\"Browser\"]"
     @AppStorage("savedChatsJSON") private var savedChatsJSON = "[]"
@@ -309,16 +389,6 @@ struct ChatView: View {
             guard autoStartPCModel, !attemptedAutoStart else { return }
             attemptedAutoStart = true
             Task { await startPCModelOnAppOpen() }
-        }
-        .onChange(of: modelProvider) { oldProvider, newProvider in
-            if oldProvider == "Ollama" { ollamaModelID = localModelID }
-            if oldProvider == "LM Studio" { lmStudioModelID = localModelID }
-            if newProvider == "Ollama" { localModelID = ollamaModelID }
-            if newProvider == "LM Studio" { localModelID = lmStudioModelID }
-        }
-        .onChange(of: localModelID) { _, newModelID in
-            if modelProvider == "Ollama" { ollamaModelID = newModelID }
-            if modelProvider == "LM Studio" { lmStudioModelID = newModelID }
         }
         .onChange(of: messages.count) { _ in persistCurrentChat() }
         .sheet(isPresented: $showingHistory) {
@@ -515,7 +585,7 @@ struct ChatView: View {
             case 404:
                 explanation = "The model endpoint returned HTTP 404. Confirm the provider is correct and the gateway exposes /\(path)." + bodyDetail
             case 502, 503, 504:
-                explanation = "The model gateway returned HTTP \(http.statusCode). It may be unable to reach the upstream Ollama/LM Studio service. Verify the model server is running, the gateway upstream URL is correct, and the selected model ID exists. Then scan model inventory and retry." + bodyDetail
+                explanation = "The model gateway returned HTTP \(http.statusCode). It may be unable to reach LM Studio on the PC. Verify the model server is running, the gateway upstream URL is correct, and the selected model ID exists. Then scan model inventory and retry." + bodyDetail
             default:
                 explanation = "Local model returned HTTP \(http.statusCode)." + bodyDetail
             }
@@ -775,6 +845,8 @@ struct PluginsView: View {
 struct TerminalGatewayView: View {
     let mode: String
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
+    @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
     @State private var host = ""
     @State private var username = ""
     @State private var command = ""
@@ -782,7 +854,6 @@ struct TerminalGatewayView: View {
     @State private var output = "Connect a trusted terminal gateway in Settings to execute commands. No command has been run."
     @State private var running = false
     @State private var drafting = false
-    @AppStorage("serviceURL") private var aiServiceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("speedMode") private var speedMode = "Balanced"
     @State private var showingSettings = false
     @State private var checkingGateway = false
@@ -892,27 +963,21 @@ struct TerminalGatewayView: View {
         drafting = true
         defer { drafting = false }
         do {
-            guard let base = URL(string: aiServiceURL), base.scheme == "https" else {
-                throw NSError(domain: "GhostGPT", code: 4, userInfo: [NSLocalizedDescriptionKey: "Configure a valid HTTPS AI service URL in Settings."])
-            }
-            var request = URLRequest(url: base.appendingPathComponent("chat"))
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.timeoutInterval = speedMode == "Fast" ? 25 : 75
             let shell = mode == "ssh" ? "Linux POSIX shell over SSH" : "Windows PowerShell"
-            request.httpBody = try JSONSerialization.data(withJSONObject: [
-                "message": "Draft exactly one \(shell) command for this task: \(task). Return only the command, no Markdown fences or explanation. Prefer read-only inspection. Do not use destructive commands, change security settings, delete files, or expose credentials.",
-                "speed": speedMode.lowercased(),
-                "tools": []
-            ])
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-                  let answer = try? JSONDecoder().decode(AIReply.self, from: data) else {
-                throw NSError(domain: "GhostGPT", code: 5, userInfo: [NSLocalizedDescriptionKey: "AI could not draft a command."])
-            }
-            command = answer.reply.trimmingCharacters(in: .whitespacesAndNewlines)
+            let instruction = "Draft exactly one \(shell) command for this task: \(task). Return only the command, no Markdown fences or explanation. Prefer read-only inspection. Do not use destructive commands, change security settings, delete files, or expose credentials."
+            let drafted = try await LocalModelClient.chat(
+                endpoint: localModelEndpoint,
+                model: localModelID,
+                messages: [
+                    ["role": "system", "content": "Draft commands only. Never claim to execute a command. Prefer read-only inspection and do not include destructive operations or credential access."],
+                    ["role": "user", "content": instruction]
+                ],
+                maxTokens: 160,
+                timeout: speedMode == "Fast" ? 25 : 75
+            )
+            command = drafted.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
-            output += "\n\nAI command draft failed: \(error.localizedDescription)"
+            output += "\n\nLocal model command draft failed: \(error.localizedDescription)"
         }
     }
 
@@ -1252,7 +1317,6 @@ struct MCPToolInfo: Identifiable {
 
 struct SettingsView: View {
     @AppStorage("notificationsEnabled") private var notificationsEnabled = true
-    @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("speedMode") private var speedMode = "Balanced"
     var body: some View {
         List {
@@ -1401,7 +1465,6 @@ struct PCModelServerSettingsView: View {
 }
 
 struct LocalModelsSettingsView: View {
-    @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
     @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
     @State private var localModelAPIKey = KeychainStore.migratedValue(for: "localModelAPIKey")
@@ -1413,7 +1476,7 @@ struct LocalModelsSettingsView: View {
         Form {
             Section("Model provider") {
                 Text("LM Studio (PC)").font(.headline)
-                Text("Cloudflare and Ollama chat providers are disabled. GhostGPT uses the LM Studio-compatible endpoint below.")
+                Text("GhostGPT uses only the configured LM Studio-compatible endpoint on your PC. No cloud chat fallback is used.")
                     .font(.footnote).foregroundStyle(.secondary)
                 if true {
                     TextField("HTTPS Tailscale model gateway URL", text: $localModelEndpoint)
@@ -1440,7 +1503,7 @@ struct LocalModelsSettingsView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Network security") {
-                Text("Use a private HTTPS endpoint reachable through Tailscale. Do not publish Ollama or LM Studio directly to the public internet. Model scanning runs only when you press the scan button.")
+                Text("Use a private HTTPS endpoint reachable through Tailscale. Do not publish the LM Studio API directly to the public internet. Model scanning runs only when you press the scan button.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }.navigationTitle("AI models")
@@ -1495,8 +1558,9 @@ struct LocalModelsSettingsView: View {
 }
 
 struct AgentWorkspaceView: View {
-    @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
+    @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
     @State private var goal = ""
     @State private var plan = ""
     @State private var status = "Ready"
@@ -1649,35 +1713,18 @@ struct AgentWorkspaceView: View {
         stepIndex = 0
         defer { busy = false }
         do {
-            let base = serviceURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            guard let url = URL(string: base + "/chat"), url.scheme == "https" else {
-                throw NSError(domain: "GhostGPTAgent", code: 1, userInfo: [NSLocalizedDescriptionKey: "AI service URL must be HTTPS."])
-            }
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.timeoutInterval = 90
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let instruction = """
             You are the planning component of GhostGPT. Create a safe, actionable plan for this goal:
             \(cleanGoal)
             Return 3-8 numbered steps. For each step state the intended action, evidence needed, success criteria, and a recovery path. Do not claim that you executed any tools. Do not request a function call or return tool-call JSON; respond with an ordinary readable plan. Prefer read-only inspection first.
             """
-            request.httpBody = try JSONSerialization.data(withJSONObject: [
-                "message": instruction,
-                "messages": [["role": "user", "content": instruction]],
-                "speed": "balanced",
-                "tools": []
-            ])
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw NSError(domain: "GhostGPTAgent", code: 2, userInfo: [NSLocalizedDescriptionKey: "No HTTP response from AI service."])
-            }
-            guard (200...299).contains(http.statusCode) else {
-                let body = String(data: data, encoding: .utf8)?.prefix(800) ?? ""
-                throw NSError(domain: "GhostGPTAgent", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "AI service returned HTTP \(http.statusCode). \(body)"])
-            }
-            let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let responseText = (object?["reply"] as? String) ?? (object?["response"] as? String) ?? (object?["message"] as? String) ?? String(data: data, encoding: .utf8) ?? "Empty response."
+            let responseText = try await LocalModelClient.chat(
+                endpoint: localModelEndpoint,
+                model: localModelID,
+                messages: [["role": "user", "content": instruction]],
+                maxTokens: 512,
+                timeout: 90
+            )
             plan = responseText
             status = "Plan received. No tools have been executed."
             runLog.insert("Created plan for goal: \(cleanGoal)", at: 0)
@@ -1697,11 +1744,6 @@ struct AgentWorkspaceView: View {
         status = "Planning the next action from the latest run results…"
         defer { preparingStep = false }
         do {
-            let base = serviceURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            guard let url = URL(string: base + "/chat"), url.scheme == "https" else {
-                throw NSError(domain: "GhostGPTAgent", code: 3, userInfo: [NSLocalizedDescriptionKey: "AI service URL must be HTTPS."])
-            }
-            let recentLog = runLog.prefix(12).reversed().joined(separator: "\n\n")
             let instruction = """
             You are GhostGPT's bounded PowerShell agent. Goal: \(cleanGoal)
             Current plan:
@@ -1712,24 +1754,13 @@ struct AgentWorkspaceView: View {
             Propose exactly ONE next PowerShell command that safely advances the goal. Use observed output to inspect success or recover from failures. Prefer read-only diagnostics. Never use encoded/obfuscated commands, credential dumping, exfiltration, deletion, formatting, security disabling, or policy bypass. If a necessary action would modify the system, mark risk as "changes" and explain it. If the goal appears complete based on evidence, set complete to true and command to an empty string.
             Return JSON only with keys: {"purpose":"short explanation","command":"one PowerShell command or empty string","risk":"read-only or changes","expectedResult":"observable outcome","complete":false}. Do not return a function call or Markdown fences.
             """
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.timeoutInterval = 90
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: [
-                "message": instruction,
-                "messages": [["role": "user", "content": instruction]],
-                "speed": "balanced",
-                "tools": []
-            ])
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-            guard (200...299).contains(http.statusCode) else {
-                let body = String(data: data, encoding: .utf8)?.prefix(800) ?? ""
-                throw NSError(domain: "GhostGPTAgent", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "AI service returned HTTP \(http.statusCode). \(body)"])
-            }
-            let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let raw = (object?["reply"] as? String) ?? (object?["response"] as? String) ?? (object?["message"] as? String) ?? String(data: data, encoding: .utf8) ?? ""
+            let raw = try await LocalModelClient.chat(
+                endpoint: localModelEndpoint,
+                model: localModelID,
+                messages: [["role": "user", "content": instruction]],
+                maxTokens: 512,
+                timeout: 90
+            )
             guard let firstBrace = raw.firstIndex(of: "{"), let lastBrace = raw.lastIndex(of: "}"), firstBrace <= lastBrace,
                   let proposalData = String(raw[firstBrace...lastBrace]).data(using: .utf8),
                   let proposal = try JSONSerialization.jsonObject(with: proposalData) as? [String: Any] else {
@@ -1804,29 +1835,22 @@ struct AgentWorkspaceView: View {
 }
 
 struct AdvancedSettingsView: View {
-    @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
-    @AppStorage("cloudflareEnabled") private var cloudflareEnabled = true
     @AppStorage("debugLogging") private var debugLogging = false
     var body: some View {
         Form {
-            Section("AI service") {
-                TextField("Service URL", text: $serviceURL).textInputAutocapitalization(.never).keyboardType(.URL)
-                Toggle("Use Cloudflare edge connection", isOn: $cloudflareEnabled)
+            Section("AI routing") {
+                Text("Chat, agent planning, and command drafting use the private LM Studio-compatible gateway configured under AI models. No cloud AI fallback is configured.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Performance") {
-                Text("Fast mode uses a shorter client timeout; Balanced and Deep allow longer responses. Actual model reasoning speed depends on the connected AI service.")
+                Text("Fast mode uses a shorter model-response timeout; Balanced and Deep allow longer responses. Actual latency depends on the model and PC load.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Diagnostics") {
                 Toggle("Debug logging", isOn: $debugLogging)
-                Button("Reset connection settings", role: .destructive) {
-                    serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
-                    cloudflareEnabled = true
-                    debugLogging = false
-                }
             }
             Section("Security") {
-                Text("Keep API keys, passwords, and private tokens on a protected server. Do not expose raw shell services to the public internet.")
+                Text("Keep gateway tokens in Keychain and on the protected PC. Do not expose raw shell services to the public internet.")
                     .foregroundStyle(.secondary)
             }
         }.navigationTitle("Advanced Settings")

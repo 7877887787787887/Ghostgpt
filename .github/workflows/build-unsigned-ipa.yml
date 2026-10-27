@@ -30,7 +30,12 @@ jobs:
           grep -q 'configuration.delegateClass = SceneDelegate.self' ios-native/AppDelegate.swift
           grep -q 'UIHostingController(rootView: GhostGPTRootView())' ios-native/SceneDelegate.swift
           ! grep -q 'Open GhostGPT' ios-native/AppDelegate.swift ios-native/SceneDelegate.swift
-          grep -q 'ghostgpt-ai.conman31115.workers.dev' ios-native/SceneDelegate.swift
+          grep -q 'enum LocalModelClient' ios-native/SceneDelegate.swift
+          grep -q 'LocalModelClient.chat' ios-native/SceneDelegate.swift
+          ! grep -q 'workers.dev' ios-native/SceneDelegate.swift
+          ! grep -q 'Cloudflare' ios-native/SceneDelegate.swift
+          ! grep -q 'Ollama' ios-native/SceneDelegate.swift
+          ! grep -q 'modelProvider' ios-native/SceneDelegate.swift
           grep -q 'URLSession.shared.data' ios-native/SceneDelegate.swift
           grep -q 'enum KeychainStore' ios-native/SceneDelegate.swift
           ! grep -q '@AppStorage("localModelAPIKey")' ios-native/SceneDelegate.swift
