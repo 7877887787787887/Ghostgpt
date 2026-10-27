@@ -769,6 +769,8 @@ struct TerminalGatewayView: View {
     @AppStorage("serviceURL") private var aiServiceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("speedMode") private var speedMode = "Balanced"
     @State private var showingSettings = false
+    @State private var checkingGateway = false
+    @State private var gatewayStatus = "Not checked yet."
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label(mode == "ssh" ? "SSH terminal" : "PowerShell terminal", systemImage: mode == "ssh" ? "server.rack" : "terminal")
@@ -807,16 +809,65 @@ struct TerminalGatewayView: View {
                 Text("AI drafts only. Review the command above before pressing Run.")
                     .font(.caption2).foregroundStyle(.secondary)
                 Button("Change gateway") { showingSettings = true }.font(.caption)
+                Button {
+                    Task { await checkGatewayConnection() }
+                } label: {
+                    Label(checkingGateway ? "Checking connection…" : "Test gateway connection", systemImage: "network")
+                }.buttonStyle(.bordered).disabled(checkingGateway)
+                Text(gatewayStatus).font(.caption).foregroundStyle(.secondary)
+                Text("The automatic check sends only an HTTPS HEAD request. It never runs a PowerShell or SSH command; a gateway may need a dedicated health endpoint to report full readiness.")
+                    .font(.caption2).foregroundStyle(.tertiary)
             }
             Spacer()
             Text("Security: only use a gateway you trust. Review commands before running them. Credentials should be handled by the gateway, not pasted into chat.")
                 .font(.caption2).foregroundStyle(.secondary)
         }.padding()
             .navigationTitle(mode == "ssh" ? "SSH" : "PowerShell")
-            .onAppear { if host.isEmpty { host = mode == "ssh" ? "Ghost" : "msi" } }
+            .onAppear {
+                if host.isEmpty { host = mode == "ssh" ? "Ghost" : "msi" }
+                if gatewayStatus == "Not checked yet." && !gatewayURL.isEmpty {
+                    Task { await checkGatewayConnection() }
+                }
+            }
             .sheet(isPresented: $showingSettings) {
                 NavigationStack { TerminalGatewaySettingsView().toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingSettings = false } } } }
             }
+    }
+
+    @MainActor
+    private func checkGatewayConnection() async {
+        let cleaned = gatewayURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: cleaned), url.scheme == "https", url.host != nil else {
+            gatewayStatus = "Configure a valid HTTPS gateway URL in Settings."
+            return
+        }
+        checkingGateway = true
+        defer { checkingGateway = false }
+        do {
+            var request = URLRequest(url: url)
+            request.httpMethod = "HEAD"
+            request.timeoutInterval = 8
+            let token = KeychainStore.migratedValue(for: "terminalGatewayToken")
+            if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            switch http.statusCode {
+            case 200..<300:
+                gatewayStatus = "Endpoint responds to HTTPS (HTTP \(http.statusCode)). Reachability is confirmed; PowerShell execution is not tested."
+            case 401, 403:
+                gatewayStatus = "Gateway is reachable but rejected authentication (HTTP \(http.statusCode)). Check the bearer token in Settings."
+            case 404:
+                gatewayStatus = "Gateway host is reachable, but this endpoint path returned HTTP 404. Check the configured URL."
+            case 405:
+                gatewayStatus = "Gateway is reachable, but HEAD health checks are unsupported (HTTP 405). A dedicated health endpoint is needed to confirm readiness."
+            case 500..<600:
+                gatewayStatus = "Gateway responded with HTTP \(http.statusCode). The service or its upstream may not be ready."
+            default:
+                gatewayStatus = "Gateway responded with HTTP \(http.statusCode). No command was sent."
+            }
+        } catch {
+            gatewayStatus = "Could not reach the HTTPS gateway: \(error.localizedDescription). No command was sent."
+        }
     }
 
     private func draftCommand() async {
