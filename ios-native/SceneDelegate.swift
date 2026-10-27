@@ -908,6 +908,8 @@ struct MCPConnectorView: View {
     @State private var resultText = "Connect to an MCP server to discover its tools."
     @State private var busy = false
     @State private var protocolVersion = "2025-03-26"
+    @State private var sessionID: String?
+    @State private var requestID = 10
 
     var body: some View {
         Form {
@@ -919,7 +921,7 @@ struct MCPConnectorView: View {
                 Button { Task { await connectAndListTools() } } label: {
                     Label(busy ? "Connecting…" : "Connect and discover tools", systemImage: "point.3.connected.trianglepath.dotted")
                 }.disabled(busy || serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Text("Uses MCP JSON-RPC over HTTP. The server must be reachable from this iPhone, typically over your private Tailscale network. Legacy SSE-only servers may need a bridge.")
+                Text("Uses MCP JSON-RPC over Streamable HTTP. The server must be reachable from this iPhone, preferably through private Tailscale access.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Discovered tools (\(tools.count))") {
@@ -938,7 +940,7 @@ struct MCPConnectorView: View {
                     Button { Task { await callSelectedTool() } } label: {
                         Label(busy ? "Working…" : "Call selected MCP tool", systemImage: "play.fill")
                     }.disabled(busy || selectedTool.isEmpty)
-                    Text("Review arguments carefully. MCP tools can modify files, systems, or accounts depending on the server's permissions.")
+                    Text("Review arguments before execution. Tools can modify systems or data according to the server's permissions.")
                         .font(.footnote).foregroundStyle(.orange)
                 }
             }
@@ -947,6 +949,11 @@ struct MCPConnectorView: View {
             }
         }
         .navigationTitle("MCP connectors")
+    }
+
+    private func nextRequestID() -> Int {
+        requestID += 1
+        return requestID
     }
 
     private func makeRequest(method: String, params: [String: Any], id: Int) async throws -> (Data, HTTPURLResponse) {
@@ -958,22 +965,49 @@ struct MCPConnectorView: View {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
-        if !bearerToken.isEmpty { request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization") }
+        request.setValue(protocolVersion, forHTTPHeaderField: "MCP-Protocol-Version")
+        if let sessionID { request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id") }
+        if !bearerToken.isEmpty { request.setValue("Bearer \\(bearerToken)", forHTTPHeaderField: "Authorization") }
         request.timeoutInterval = 30
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "jsonrpc": "2.0", "id": id, "method": method, "params": params
         ])
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        if let returnedSession = http.value(forHTTPHeaderField: "Mcp-Session-Id"), !returnedSession.isEmpty {
+            sessionID = returnedSession
+        }
         guard (200..<300).contains(http.statusCode) else {
-            throw NSError(domain: "GhostGPT.MCP", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "MCP HTTP \(http.statusCode): \(String(data: data, encoding: .utf8) ?? "No response body")"])
+            throw NSError(domain: "GhostGPT.MCP", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "MCP HTTP \\(http.statusCode): \\(String(data: data, encoding: .utf8) ?? "No response body")"])
         }
         return (data, http)
     }
 
+    private func sendInitializedNotification() async throws {
+        guard let url = URL(string: serverURL.trimmingCharacters(in: .whitespacesAndNewlines)),
+              url.scheme == "https", url.host != nil else {
+            throw NSError(domain: "GhostGPT.MCP", code: 1, userInfo: [NSLocalizedDescriptionKey: "Enter a valid HTTPS MCP endpoint."])
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        request.setValue(protocolVersion, forHTTPHeaderField: "MCP-Protocol-Version")
+        if let sessionID { request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id") }
+        if !bearerToken.isEmpty { request.setValue("Bearer \\(bearerToken)", forHTTPHeaderField: "Authorization") }
+        request.timeoutInterval = 30
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "method": "notifications/initialized", "params": [:] as [String: Any]
+        ])
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(http.statusCode) else {
+            throw NSError(domain: "GhostGPT.MCP", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "MCP initialized notification returned HTTP \\(http.statusCode)."])
+        }
+    }
+
     private func decodeJSONRPC(_ data: Data) throws -> [String: Any] {
         if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { return object }
-        // Some streamable HTTP servers respond with a single SSE data event.
         if let text = String(data: data, encoding: .utf8) {
             for line in text.components(separatedBy: .newlines) where line.hasPrefix("data:") {
                 let payload = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
@@ -987,53 +1021,79 @@ struct MCPConnectorView: View {
     private func connectAndListTools() async {
         busy = true
         defer { busy = false }
+        sessionID = nil
+        tools = []
         do {
             let (initData, _) = try await makeRequest(method: "initialize", params: [
                 "protocolVersion": protocolVersion,
                 "capabilities": [String: Any](),
-                "clientInfo": ["name": "GhostGPT iOS", "version": "1.0"]
-            ], id: 1)
+                "clientInfo": ["name": "GhostGPT iOS", "version": "1.1"]
+            ], id: nextRequestID())
             let initObject = try decodeJSONRPC(initData)
-            if let error = initObject["error"] { throw NSError(domain: "GhostGPT.MCP", code: 3, userInfo: [NSLocalizedDescriptionKey: "Initialize failed: \(error)"]) }
+            if let error = initObject["error"] {
+                throw NSError(domain: "GhostGPT.MCP", code: 3, userInfo: [NSLocalizedDescriptionKey: "Initialize failed: \\(error)"])
+            }
             if let result = initObject["result"] as? [String: Any],
                let version = result["protocolVersion"] as? String { protocolVersion = version }
-            _ = try await makeRequest(method: "notifications/initialized", params: [:], id: 2)
-            let (data, _) = try await makeRequest(method: "tools/list", params: [:], id: 3)
-            let object = try decodeJSONRPC(data)
-            if let error = object["error"] { throw NSError(domain: "GhostGPT.MCP", code: 4, userInfo: [NSLocalizedDescriptionKey: "tools/list failed: \(error)"]) }
-            let result = object["result"] as? [String: Any] ?? [:]
-            let rawTools = result["tools"] as? [[String: Any]] ?? []
-            tools = rawTools.compactMap { item in
-                guard let name = item["name"] as? String else { return nil }
-                return MCPToolInfo(name: name, description: item["description"] as? String ?? "")
-            }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            try await sendInitializedNotification()
+
+            var cursor: String?
+            var discovered: [MCPToolInfo] = []
+            var pageCount = 0
+            repeat {
+                var params: [String: Any] = [:]
+                if let cursor { params["cursor"] = cursor }
+                let (data, _) = try await makeRequest(method: "tools/list", params: params, id: nextRequestID())
+                let object = try decodeJSONRPC(data)
+                if let error = object["error"] {
+                    throw NSError(domain: "GhostGPT.MCP", code: 4, userInfo: [NSLocalizedDescriptionKey: "tools/list failed: \\(error)"])
+                }
+                let result = object["result"] as? [String: Any] ?? [:]
+                let rawTools = result["tools"] as? [[String: Any]] ?? []
+                discovered.append(contentsOf: rawTools.compactMap { item in
+                    guard let name = item["name"] as? String else { return nil }
+                    return MCPToolInfo(name: name, description: item["description"] as? String ?? "")
+                })
+                cursor = result["nextCursor"] as? String
+                pageCount += 1
+                if pageCount >= 100 && cursor != nil {
+                    throw NSError(domain: "GhostGPT.MCP", code: 6, userInfo: [NSLocalizedDescriptionKey: "Tool listing exceeded 100 pages; stopped to prevent an endless pagination loop."])
+                }
+            } while cursor != nil
+            tools = Dictionary(discovered.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first }).values.sorted {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
             selectedTool = tools.first?.name ?? ""
-            resultText = "Connected. Server returned \(tools.count) tool(s). Protocol: \(protocolVersion)."
+            resultText = "Connected. Found \\(tools.count) tool(s). Protocol: \\(protocolVersion). Session: \\(sessionID == nil ? "stateless" : "maintained")."
         } catch {
             tools = []
-            resultText = "Connection failed: \(error.localizedDescription)"
+            resultText = "Connection failed: \\(error.localizedDescription)"
         }
     }
 
     private func callSelectedTool() async {
         guard let argsData = argumentsJSON.data(using: .utf8),
               let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any] else {
-            resultText = "Arguments must be a valid JSON object, for example: {\"path\":\"/home/pi\"}"
+            resultText = "Arguments must be a valid JSON object, for example: {\\"path\\":\\"/home/pi\\"}"
+            return
+        }
+        guard let tool = tools.first(where: { $0.name == selectedTool }) else {
+            resultText = "Select a discovered tool first."
             return
         }
         busy = true
         defer { busy = false }
         do {
             let (data, _) = try await makeRequest(method: "tools/call", params: [
-                "name": selectedTool, "arguments": args
-            ], id: 4)
+                "name": tool.name, "arguments": args
+            ], id: nextRequestID())
             let object = try decodeJSONRPC(data)
             if let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
                let text = String(data: pretty, encoding: .utf8) {
                 resultText = text
             } else { resultText = String(data: data, encoding: .utf8) ?? "Tool completed with an unreadable response." }
         } catch {
-            resultText = "Tool call failed: \(error.localizedDescription)"
+            resultText = "Tool call failed: \\(error.localizedDescription)"
         }
     }
 }
@@ -1123,7 +1183,6 @@ struct LocalModelsSettingsView: View {
                 Text("Previously detected model names are examples only and may be outdated. Press “Scan PC model inventory” above to retrieve the models currently advertised by your configured gateway.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Text("Choose a model based on available PC memory, latency, and task complexity. The app connects to your local model only through the HTTPS gateway you configure; keep that gateway private to your Tailscale network.")
-                    .font(.footnote).foregroundStyle(.secondary)
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Network security") {
