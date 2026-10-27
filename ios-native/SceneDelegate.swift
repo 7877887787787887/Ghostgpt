@@ -280,25 +280,32 @@ struct ChatView: View {
         Task {
             defer { isConnecting = false }
             do {
-                guard let baseURL = URL(string: serviceURL), baseURL.scheme == "https" else {
-                    throw NSError(domain: "GhostGPT", code: 1, userInfo: [NSLocalizedDescriptionKey: "Use a valid HTTPS service URL in Settings."])
-                }
-                var request = URLRequest(url: baseURL.appendingPathComponent("chat"))
-                request.httpMethod = "POST"
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.timeoutInterval = speedMode == "Fast" ? 25 : 75
-                request.httpBody = try JSONSerialization.data(withJSONObject: [
-                    "message": text,
-                    "speed": speedMode.lowercased(),
-                    "tools": enabledTools
-                ])
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-                if (200..<300).contains(http.statusCode), let answer = try? JSONDecoder().decode(AIReply.self, from: data) {
-                    messages.append(ChatMessage(text: answer.reply, isUser: false))
+                let history = messages.map { ["role": $0.isUser ? "user" : "assistant", "content": $0.text] }
+                if modelProvider == "Cloudflare" {
+                    guard let baseURL = URL(string: serviceURL), baseURL.scheme == "https" else {
+                        throw NSError(domain: "GhostGPT", code: 1, userInfo: [NSLocalizedDescriptionKey: "Use a valid HTTPS service URL in Settings."])
+                    }
+                    var request = URLRequest(url: baseURL.appendingPathComponent("chat"))
+                    request.httpMethod = "POST"
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.timeoutInterval = speedMode == "Fast" ? 25 : 75
+                    request.httpBody = try JSONSerialization.data(withJSONObject: [
+                        "message": text,
+                        "messages": history,
+                        "speed": speedMode.lowercased(),
+                        "model": localModelID,
+                        "tools": enabledTools
+                    ])
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+                    if (200..<300).contains(http.statusCode), let answer = try? JSONDecoder().decode(AIReply.self, from: data) {
+                        messages.append(ChatMessage(text: answer.reply, isUser: false))
+                    } else {
+                        let serviceError = try? JSONDecoder().decode(AIError.self, from: data)
+                        throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: serviceError?.error ?? "The AI service returned HTTP \(http.statusCode)."])
+                    }
                 } else {
-                    let serviceError = try? JSONDecoder().decode(AIError.self, from: data)
-                    throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: serviceError?.error ?? "The AI service returned HTTP \(http.statusCode)."])
+                    try await sendToLocalModel(history: history)
                 }
             } catch {
                 errorText = error.localizedDescription == "The operation couldn’t be completed. (NSURLErrorDomain error -1009.)"
@@ -306,6 +313,40 @@ struct ChatView: View {
                     : "GhostGPT request failed: \(error.localizedDescription)"
             }
         }
+    }
+
+    private func sendToLocalModel(history: [[String: String]]) async throws {
+        let cleaned = localModelEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let base = URL(string: cleaned), base.scheme == "https" else {
+            throw NSError(domain: "GhostGPT", code: 2, userInfo: [NSLocalizedDescriptionKey: "Set a private HTTPS Tailscale URL for your PC's model gateway in Settings → AI models."])
+        }
+        let path = modelProvider == "Ollama" ? "api/chat" : "v1/chat/completions"
+        var request = URLRequest(url: base.appendingPathComponent(path))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !localModelAPIKey.isEmpty { request.setValue("Bearer \(localModelAPIKey)", forHTTPHeaderField: "Authorization") }
+        request.timeoutInterval = speedMode == "Fast" ? 45 : 180
+        if modelProvider == "Ollama" {
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "model": localModelID, "stream": false, "messages": history
+            ])
+        } else {
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "model": localModelID, "stream": false, "messages": history
+            ])
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(http.statusCode) else {
+            throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Local model returned HTTP \(http.statusCode): \(String(data: data, encoding: .utf8) ?? "No response body")"])
+        }
+        let reply: String
+        if modelProvider == "Ollama" {
+            reply = try JSONDecoder().decode(OllamaChatResponse.self, from: data).message.content
+        } else {
+            reply = try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message.content ?? "The local model returned an empty response."
+        }
+        messages.append(ChatMessage(text: reply, isUser: false))
     }
 }
 
