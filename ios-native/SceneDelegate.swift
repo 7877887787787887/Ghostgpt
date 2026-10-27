@@ -196,6 +196,10 @@ struct ChatView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                     Text(errorText).font(.caption)
                     Spacer()
+                    if messages.last?.isUser == true {
+                        Button("Retry") { retryLastMessage() }
+                            .font(.caption.weight(.semibold))
+                    }
                     Button { self.errorText = nil } label: { Image(systemName: "xmark") }
                 }.foregroundStyle(.orange).padding(.horizontal, 16).padding(.bottom, 8)
             }
@@ -338,7 +342,10 @@ struct ChatView: View {
         Task {
             defer { isConnecting = false }
             do {
-                let history = messages.map { ["role": $0.isUser ? "user" : "assistant", "content": $0.text] }
+                // Bound request size so long conversations do not overwhelm the phone or model gateway.
+                let history = messages.suffix(24).map {
+                    ["role": $0.isUser ? "user" : "assistant", "content": String($0.text.prefix(12000))]
+                }
                 if modelProvider == "Cloudflare" {
                     guard let baseURL = URL(string: serviceURL), baseURL.scheme == "https" else {
                         throw NSError(domain: "GhostGPT", code: 1, userInfo: [NSLocalizedDescriptionKey: "Use a valid HTTPS service URL in Settings."])
@@ -371,6 +378,14 @@ struct ChatView: View {
                     : "GhostGPT request failed: \(error.localizedDescription)"
             }
         }
+    }
+
+    private func retryLastMessage() {
+        guard !isConnecting, let last = messages.last, last.isUser else { return }
+        draft = last.text
+        messages.removeLast()
+        errorText = nil
+        composerFocused = true
     }
 
     private func sendToLocalModel(history: [[String: String]]) async throws {
@@ -947,9 +962,10 @@ struct LocalModelsSettingsView: View {
                 }
             }
             Section("PC model inventory (last checked)") {
-                Text("Ollama models detected during setup: deepseek-r1:14b, qwen3.5:9b, qwen3:8b, qwen3:14b, gps-qwen3-fast-8b:latest, and gps-qwen3-fast:latest. LM Studio also advertises Meta Llama 3.1 8B Instruct, GPT-OSS 20B, Qwen 2.5 VL 7B, DeepSeek R1 Distill Qwen 7B, and Qwen 3.8 27B.")
+                Text("Previously detected model names are examples only and may be outdated. Press “Scan PC model inventory” above to retrieve the models currently advertised by your configured gateway.")
                     .font(.footnote).foregroundStyle(.secondary)
-                Text("Recommended starting point: DeepSeek R1 14B for reasoning; Qwen 3.5 9B when you want a lighter, potentially faster model. The app only connects to a local model after you configure a private HTTPS gateway.")
+                Text("Choose a model based on available PC memory, latency, and task complexity. The app connects to your local model only through the HTTPS gateway you configure; keep that gateway private to your Tailscale network.")
+                    .font(.footnote).foregroundStyle(.secondary)
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Network security") {
