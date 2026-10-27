@@ -1169,8 +1169,13 @@ struct AgentWorkspaceView: View {
     @State private var plan = ""
     @State private var status = "Ready"
     @State private var busy = false
+    @AppStorage("agentSavedGoal") private var savedGoal = ""
+    @AppStorage("agentSavedPlan") private var savedPlan = ""
+    @AppStorage("agentSavedStatus") private var savedStatus = "Ready"
+    @AppStorage("agentSavedLogJSON") private var savedLogJSON = "[]"
     @State private var runLog: [String] = []
     @State private var approved = false
+    @State private var showResetConfirmation = false
 
     var body: some View {
         Form {
@@ -1212,6 +1217,20 @@ struct AgentWorkspaceView: View {
             }
         }
         .navigationTitle("AI Agent")
+        .onAppear {
+            if goal.isEmpty { goal = savedGoal }
+            if plan.isEmpty { plan = savedPlan }
+            if status == "Ready" { status = savedStatus }
+            if runLog.isEmpty {
+                runLog = (try? JSONDecoder().decode([String].self, from: Data(savedLogJSON.utf8))) ?? []
+            }
+        }
+        .onChange(of: goal) { _, value in savedGoal = value }
+        .onChange(of: plan) { _, value in savedPlan = value }
+        .onChange(of: status) { _, value in savedStatus = value }
+        .onChange(of: runLog) { _, value in
+            savedLogJSON = String(data: (try? JSONEncoder().encode(value)) ?? Data("[]".utf8), encoding: .utf8) ?? "[]"
+        }
     }
 
     @MainActor
@@ -1249,6 +1268,7 @@ struct AgentWorkspaceView: View {
         } catch {
             status = "Planning failed: \(error.localizedDescription)"
             runLog.insert(status, at: 0)
+            runLog = Array(runLog.prefix(100))
         }
     }
 }
