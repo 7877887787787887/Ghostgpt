@@ -5,7 +5,6 @@ const config: CapacitorConfig = {
   appName: 'GhostGPT',
   webDir: 'www',
   server: {
-    url: 'https://ghostgpt.live/chat/',
     allowNavigation: ['ghostgpt.live', '*.ghostgpt.live'],
   },
 };
