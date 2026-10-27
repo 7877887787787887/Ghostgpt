@@ -895,6 +895,152 @@ struct ChatHistorySheet: View {
     }
 }
 
+
+struct MCPConnectorView: View {
+    @AppStorage("mcpServerURL") private var serverURL = ""
+    @AppStorage("mcpBearerToken") private var bearerToken = ""
+    @State private var tools: [MCPToolInfo] = []
+    @State private var selectedTool = ""
+    @State private var argumentsJSON = "{}"
+    @State private var resultText = "Connect to an MCP server to discover its tools."
+    @State private var busy = false
+    @State private var protocolVersion = "2025-03-26"
+
+    var body: some View {
+        Form {
+            Section("MCP server (Streamable HTTP)") {
+                TextField("HTTPS MCP endpoint URL", text: $serverURL)
+                    .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
+                SecureField("Bearer token (optional)", text: $bearerToken)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button { Task { await connectAndListTools() } } label: {
+                    Label(busy ? "Connecting…" : "Connect and discover tools", systemImage: "point.3.connected.trianglepath.dotted")
+                }.disabled(busy || serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Text("Uses MCP JSON-RPC over HTTP. The server must be reachable from this iPhone, typically over your private Tailscale network. Legacy SSE-only servers may need a bridge.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("Discovered tools (\(tools.count))") {
+                if tools.isEmpty {
+                    Text("No tools loaded yet. Connect to the endpoint first.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    Picker("Tool", selection: $selectedTool) {
+                        ForEach(tools) { tool in Text(tool.name).tag(tool.name) }
+                    }
+                    if let tool = tools.first(where: { $0.name == selectedTool }), !tool.description.isEmpty {
+                        Text(tool.description).font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Text("Arguments JSON").font(.subheadline.weight(.medium))
+                    TextEditor(text: $argumentsJSON).font(.system(.footnote, design: .monospaced)).frame(minHeight: 100)
+                    Button { Task { await callSelectedTool() } } label: {
+                        Label(busy ? "Working…" : "Call selected MCP tool", systemImage: "play.fill")
+                    }.disabled(busy || selectedTool.isEmpty)
+                    Text("Review arguments carefully. MCP tools can modify files, systems, or accounts depending on the server's permissions.")
+                        .font(.footnote).foregroundStyle(.orange)
+                }
+            }
+            Section("Connection output") {
+                Text(resultText).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+            }
+        }
+        .navigationTitle("MCP connectors")
+    }
+
+    private func makeRequest(method: String, params: [String: Any], id: Int) async throws -> (Data, HTTPURLResponse) {
+        guard let url = URL(string: serverURL.trimmingCharacters(in: .whitespacesAndNewlines)),
+              url.scheme == "https", url.host != nil else {
+            throw NSError(domain: "GhostGPT.MCP", code: 1, userInfo: [NSLocalizedDescriptionKey: "Enter a valid HTTPS MCP endpoint."])
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        if !bearerToken.isEmpty { request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization") }
+        request.timeoutInterval = 30
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": id, "method": method, "params": params
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(http.statusCode) else {
+            throw NSError(domain: "GhostGPT.MCP", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "MCP HTTP \(http.statusCode): \(String(data: data, encoding: .utf8) ?? "No response body")"])
+        }
+        return (data, http)
+    }
+
+    private func decodeJSONRPC(_ data: Data) throws -> [String: Any] {
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { return object }
+        // Some streamable HTTP servers respond with a single SSE data event.
+        if let text = String(data: data, encoding: .utf8) {
+            for line in text.components(separatedBy: .newlines) where line.hasPrefix("data:") {
+                let payload = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                if let bytes = payload.data(using: .utf8),
+                   let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] { return object }
+            }
+        }
+        throw NSError(domain: "GhostGPT.MCP", code: 2, userInfo: [NSLocalizedDescriptionKey: "Server response was not a supported JSON-RPC response."])
+    }
+
+    private func connectAndListTools() async {
+        busy = true
+        defer { busy = false }
+        do {
+            let (initData, _) = try await makeRequest(method: "initialize", params: [
+                "protocolVersion": protocolVersion,
+                "capabilities": [String: Any](),
+                "clientInfo": ["name": "GhostGPT iOS", "version": "1.0"]
+            ], id: 1)
+            let initObject = try decodeJSONRPC(initData)
+            if let error = initObject["error"] { throw NSError(domain: "GhostGPT.MCP", code: 3, userInfo: [NSLocalizedDescriptionKey: "Initialize failed: \(error)"]) }
+            if let result = initObject["result"] as? [String: Any],
+               let version = result["protocolVersion"] as? String { protocolVersion = version }
+            _ = try await makeRequest(method: "notifications/initialized", params: [:], id: 2)
+            let (data, _) = try await makeRequest(method: "tools/list", params: [:], id: 3)
+            let object = try decodeJSONRPC(data)
+            if let error = object["error"] { throw NSError(domain: "GhostGPT.MCP", code: 4, userInfo: [NSLocalizedDescriptionKey: "tools/list failed: \(error)"]) }
+            let result = object["result"] as? [String: Any] ?? [:]
+            let rawTools = result["tools"] as? [[String: Any]] ?? []
+            tools = rawTools.compactMap { item in
+                guard let name = item["name"] as? String else { return nil }
+                return MCPToolInfo(name: name, description: item["description"] as? String ?? "")
+            }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            selectedTool = tools.first?.name ?? ""
+            resultText = "Connected. Server returned \(tools.count) tool(s). Protocol: \(protocolVersion)."
+        } catch {
+            tools = []
+            resultText = "Connection failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func callSelectedTool() async {
+        guard let argsData = argumentsJSON.data(using: .utf8),
+              let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any] else {
+            resultText = "Arguments must be a valid JSON object, for example: {\"path\":\"/home/pi\"}"
+            return
+        }
+        busy = true
+        defer { busy = false }
+        do {
+            let (data, _) = try await makeRequest(method: "tools/call", params: [
+                "name": selectedTool, "arguments": args
+            ], id: 4)
+            let object = try decodeJSONRPC(data)
+            if let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
+               let text = String(data: pretty, encoding: .utf8) {
+                resultText = text
+            } else { resultText = String(data: data, encoding: .utf8) ?? "Tool completed with an unreadable response." }
+        } catch {
+            resultText = "Tool call failed: \(error.localizedDescription)"
+        }
+    }
+}
+
+struct MCPToolInfo: Identifiable {
+    let name: String
+    let description: String
+    var id: String { name }
+}
+
 struct SettingsView: View {
     @AppStorage("notificationsEnabled") private var notificationsEnabled = true
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
@@ -917,6 +1063,7 @@ struct SettingsView: View {
                 NavigationLink("Plugins & capabilities") { PluginsView() }
                 NavigationLink("AI models and local model scan") { LocalModelsSettingsView() }
                 NavigationLink("Terminal gateway (PowerShell / SSH)") { TerminalGatewaySettingsView() }
+                NavigationLink("MCP connectors") { MCPConnectorView() }
                 NavigationLink("Browser") { BrowserView() }
             }
             Section("Connection") {
