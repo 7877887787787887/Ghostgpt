@@ -376,6 +376,17 @@ struct MessageBubble: View {
             } else { Spacer(minLength: 28) }
             VStack(alignment: .leading, spacing: 7) {
                 Text(message.text).textSelection(.enabled).font(.body).frame(maxWidth: .infinity, alignment: .leading)
+                if !message.isUser {
+                    HStack(spacing: 14) {
+                        Button {
+                            UIPasteboard.general.string = message.text
+                        } label: {
+                            Label("Copy", systemImage: "doc.on.doc").font(.caption2)
+                        }
+                        .accessibilityLabel("Copy assistant response")
+                        Spacer(minLength: 0)
+                    }.foregroundStyle(.secondary).padding(.top, 3)
+                }
             }.padding(message.isUser ? 12 : 2)
                 .background(message.isUser ? Color.blue.opacity(0.28) : Color.clear, in: RoundedRectangle(cornerRadius: 17))
             if message.isUser {
