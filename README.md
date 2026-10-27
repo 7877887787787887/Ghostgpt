@@ -2,13 +2,16 @@
 
 GhostGPT is a native SwiftUI iOS workspace with chat, a built-in browser, emoji picker, speed selection, tool toggles, local model selection, and PowerShell/SSH terminal screens.
 
-## AI provider
+## AI providers and model inventory
 
-GhostGPT uses **LM Studio on the Windows PC only** for chat, agent planning, and command drafting. The app does not fall back to Cloudflare or Ollama. Open **Settings → AI models and local model scan**, enter the private HTTPS gateway and bearer token, then press **Scan PC model inventory** to retrieve current LM Studio model IDs. The app prefers the configured model when it is present and selects an available advertised model if the saved ID is no longer installed.
+GhostGPT supports three explicit providers: **Cloudflare Worker**, **Ollama on the Windows PC**, and **LM Studio on the Windows PC**. The provider selection is persisted, each provider has its own model ID, and switching does not silently fall back to a different provider. Cloudflare requests use the configured HTTPS Worker /chat route; its optional model inventory scan expects the Worker to expose /v1/models. If the Worker does not expose that route, set the model ID manually or add the inventory endpoint to the Worker.
 
+Ollama uses the authenticated PC gateway GET /api/tags and POST /api/chat routes. The gateway only proxies those two Ollama paths to 127.0.0.1:11434; it does not expose Ollama's model-pull or administrative endpoints. LM Studio uses authenticated /control/start, /v1/models, and /v1/chat/completions routes. The app scans inventories and replaces a stale saved model ID only when that ID is no longer advertised.
+
+Open **Settings → AI models** to choose a provider, configure its HTTPS endpoint, enter its token, and scan models. Cloudflare credentials are stored under a separate iOS Keychain account from the local PC gateway token. Both local providers require the PC gateway to be reachable over private Tailscale HTTPS.
 ## Private PC gateway
 
-The script `windows/lmstudio_gateway.py` implements the authenticated LM Studio proxy/control API and a PowerShell endpoint at `/terminal`; it listens only on `127.0.0.1:8767`. Configure Tailscale Serve separately to expose that loopback service through a tailnet-only HTTPS endpoint such as `https://msi.tail28f016.ts.net:10000`. This repository does not install a Windows scheduled task or change Tailscale Serve settings automatically. The authenticated `HEAD /terminal` readiness check verifies that PowerShell is available without running a command.
+The script `windows/lmstudio_gateway.py` implements the authenticated LM Studio proxy/control API, restricted Ollama proxy routes, and a PowerShell endpoint at `/terminal`; it listens only on `127.0.0.1:8767`. Configure Tailscale Serve separately to expose that loopback service through a tailnet-only HTTPS endpoint such as `https://msi.tail28f016.ts.net:10000`. This repository does not install a Windows scheduled task or change Tailscale Serve settings automatically. The authenticated `HEAD /terminal` readiness check verifies that PowerShell is available without running a command.
 
 In the iPhone app, open **Settings → Terminal gateway (PowerShell / SSH)**:
 - Endpoint: `https://msi.tail28f016.ts.net:10000/terminal`
@@ -20,7 +23,7 @@ The iPhone must be connected to the same Tailscale tailnet. Both model and Power
 
 ## Browser and tool behavior
 
-The browser tab is an in-app web view. The local model can draft plans and commands but does not execute tools by itself. Terminal execution requires a separate configured gateway and explicit user action.
+The browser tab is an in-app web view. The selected model can draft plans and commands but does not execute tools by itself. Terminal execution requires a separate configured gateway and explicit user action.
 
 ## Build an unsigned IPA
 

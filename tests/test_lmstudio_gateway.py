@@ -42,6 +42,9 @@ class FakeHandler:
     def proxy_to_lmstudio(self):
         return gateway.Handler.proxy_to_lmstudio(self)
 
+    def proxy_to_ollama(self):
+        return gateway.Handler.proxy_to_ollama(self)
+
     def send_response(self, status, message=None):
         self.status = status
 
@@ -275,18 +278,60 @@ class GatewayAuthenticationTests(unittest.TestCase):
             gateway.Handler.do_POST(handler)
         self.assertEqual(handler.responses[0][0], 501)
 
-    def test_ios_ai_routes_only_to_local_lm_studio(self):
+    def test_ollama_model_routes_require_auth_and_do_not_forward_bearer(self):
+        unauthenticated = FakeHandler(path="/api/tags")
+        with patch.object(gateway.http.client, "HTTPConnection") as upstream:
+            gateway.Handler.do_GET(unauthenticated)
+        self.assertEqual(unauthenticated.responses[0][0], 401)
+        upstream.assert_not_called()
+
+        handler = FakeHandler(path="/api/tags", headers={
+            "Authorization": "Bearer correct-test-token", "Accept": "application/json"
+        })
+        class FakeResponse:
+            status = 200
+            def read(self): return b'{"models":[{"name":"test-model"}]}'
+            def getheaders(self): return [("Content-Type", "application/json")]
+        class FakeConnection:
+            def __init__(self, host, port, timeout=None):
+                self.target = (host, port)
+                self.forwarded_headers = None
+                self.request_path = None
+            def request(self, method, path, body=None, headers=None):
+                self.forwarded_headers = headers or {}
+                self.request_path = path
+            def getresponse(self): return FakeResponse()
+            def close(self): pass
+        created = []
+        def connection_factory(host, port, timeout=None):
+            conn = FakeConnection(host, port, timeout)
+            created.append(conn)
+            return conn
+        with patch.object(gateway.http.client, "HTTPConnection", side_effect=connection_factory):
+            gateway.Handler.do_GET(handler)
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(created[0].target, (gateway.OLLAMA_HOST, gateway.OLLAMA_PORT))
+        self.assertEqual(created[0].request_path, "/api/tags")
+        self.assertNotIn("Authorization", created[0].forwarded_headers)
+
+    def test_ollama_proxy_rejects_unapproved_routes(self):
+        handler = FakeHandler(path="/api/pull", headers={"Authorization": "Bearer correct-test-token"})
+        with patch.object(gateway.http.client, "HTTPConnection") as upstream:
+            gateway.Handler.do_GET(handler)
+        self.assertEqual(handler.responses[0][0], 404)
+        upstream.assert_not_called()
+
+    def test_ios_supports_all_configured_model_providers_without_silent_fallback(self):
         source = (ROOT / "ios-native" / "SceneDelegate.swift").read_text(encoding="utf-8")
-        self.assertIn("enum LocalModelClient", source)
-        self.assertGreaterEqual(source.count("LocalModelClient.chat("), 3)
-        for forbidden in (
-            "ghostgpt-ai.conman31115.workers.dev",
-            "Cloudflare",
-            "Ollama",
-            "modelProvider",
-            "cloudflareEnabled",
+        for required in (
+            'enum ModelProvider', 'case cloudflare = "Cloudflare"', 'case ollama = "Ollama"',
+            'case lmStudio = "LM Studio"', 'cloudflareModelID', 'ollamaModelID', 'lmStudioModelID',
+            'cloudflareAPIKey', 'KeychainStore.migratedValue(for: selectedProvider.keychainAccount)',
+            'api/tags', 'api/chat', 'v1/models', 'LocalModelClient.chat',
         ):
-            self.assertNotIn(forbidden, source)
+            self.assertIn(required, source)
+        self.assertIn('components.scheme?.lowercased() == "https"', source)
+        self.assertIn('Provider changed. Scan the new provider', source)
 
 if __name__ == "__main__":
     unittest.main()

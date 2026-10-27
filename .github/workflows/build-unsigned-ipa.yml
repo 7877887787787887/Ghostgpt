@@ -32,10 +32,15 @@ jobs:
           ! grep -q 'Open GhostGPT' ios-native/AppDelegate.swift ios-native/SceneDelegate.swift
           grep -q 'enum LocalModelClient' ios-native/SceneDelegate.swift
           grep -q 'LocalModelClient.chat' ios-native/SceneDelegate.swift
-          ! grep -q 'workers.dev' ios-native/SceneDelegate.swift
-          ! grep -q 'Cloudflare' ios-native/SceneDelegate.swift
-          ! grep -q 'Ollama' ios-native/SceneDelegate.swift
-          ! grep -q 'modelProvider' ios-native/SceneDelegate.swift
+          grep -q 'enum ModelProvider' ios-native/SceneDelegate.swift
+          grep -q 'case cloudflare = "Cloudflare"' ios-native/SceneDelegate.swift
+          grep -q 'case ollama = "Ollama"' ios-native/SceneDelegate.swift
+          grep -q 'case lmStudio = "LM Studio"' ios-native/SceneDelegate.swift
+          grep -q 'cloudflareModelID' ios-native/SceneDelegate.swift
+          grep -q 'ollamaModelID' ios-native/SceneDelegate.swift
+          grep -q 'lmStudioModelID' ios-native/SceneDelegate.swift
+          grep -q 'proxy_to_ollama' windows/lmstudio_gateway.py
+          grep -q 'OLLAMA_PORT' windows/lmstudio_gateway.py
           grep -q 'URLSession.shared.data' ios-native/SceneDelegate.swift
           grep -q 'enum KeychainStore' ios-native/SceneDelegate.swift
           ! grep -q '@AppStorage("localModelAPIKey")' ios-native/SceneDelegate.swift

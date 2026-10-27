@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 HOST, PORT = "127.0.0.1", 8767
 UPSTREAM_HOST, UPSTREAM_PORT = "127.0.0.1", 1234
+OLLAMA_HOST, OLLAMA_PORT = "127.0.0.1", 11434
 LMS_EXE = Path.home() / ".lmstudio" / "bin" / "lms.exe"
 LOG_DIR = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "GhostGPT"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -196,6 +197,9 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json(503, {"ok": False, "ready": False, "error": str(exc)})
             return
+        if path == "/api/tags":
+            self.proxy_to_ollama()
+            return
         if path.startswith("/v1/") or path == "/v1":
             self.proxy_to_lmstudio()
             return
@@ -215,6 +219,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/terminal":
             self.handle_terminal()
+            return
+        if path == "/api/chat":
+            self.proxy_to_ollama()
             return
         if path.startswith("/v1/") or path == "/v1":
             self.proxy_to_lmstudio()
@@ -330,6 +337,54 @@ class Handler(BaseHTTPRequestHandler):
             "truncated": truncated,
             "risk": "changes" if risky else "read-only",
         })
+
+    def proxy_to_ollama(self):
+        path = urlsplit(self.path).path
+        allowed = (self.command == "GET" and path == "/api/tags") or (self.command == "POST" and path == "/api/chat")
+        if not allowed:
+            self.send_json(404, {"error": "Only GET /api/tags and POST /api/chat are exposed for Ollama"})
+            return
+        conn = None
+        try:
+            body = None
+            if self.command == "POST":
+                raw_length = self.headers.get("Content-Length", "0") or "0"
+                try:
+                    length = int(raw_length)
+                except ValueError:
+                    self.send_json(400, {"error": "Invalid Content-Length"})
+                    return
+                if length < 0:
+                    self.send_json(400, {"error": "Invalid Content-Length"})
+                    return
+                if length > MAX_BODY_BYTES:
+                    self.send_json(413, {"error": "Request body exceeds the gateway limit"})
+                    return
+                body = self.rfile.read(length) if length else b""
+                if len(body) != length:
+                    self.send_json(400, {"error": "Incomplete request body"})
+                    return
+            headers = {name: self.headers[name] for name in ("Content-Type", "Accept") if self.headers.get(name)}
+            conn = http.client.HTTPConnection(OLLAMA_HOST, OLLAMA_PORT, timeout=185)
+            conn.request(self.command, path, body=body, headers=headers)
+            response = conn.getresponse()
+            payload = response.read()
+            self.send_response(response.status)
+            for name, value in response.getheaders():
+                if name.lower() not in {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade", "content-length"}:
+                    self.send_header(name, value)
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(payload)
+            self.close_connection = True
+            logging.info("proxied Ollama %s %s -> %s (%d bytes)", self.command, path, response.status, len(payload))
+        except Exception:
+            logging.exception("Ollama proxy request failed for %s", path)
+            self.send_json(502, {"error": "Ollama on this PC could not be reached"})
+        finally:
+            if conn:
+                conn.close()
 
     def proxy_to_lmstudio(self):
         if not (urlsplit(self.path).path.startswith("/v1/") or urlsplit(self.path).path == "/v1"):

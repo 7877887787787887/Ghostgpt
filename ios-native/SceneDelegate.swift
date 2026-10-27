@@ -16,8 +16,12 @@ struct ChatSession: Identifiable, Codable {
     var updatedAt: Date
 }
 
+struct AIReply: Decodable { let reply: String }
+struct AIError: Decodable { let error: String }
+struct OllamaTags: Decodable { struct Model: Decodable { let name: String }; let models: [Model] }
 struct OpenAIModels: Decodable { struct Model: Decodable { let id: String }; let data: [Model] }
 struct OpenAIChatResponse: Decodable { struct Choice: Decodable { struct Message: Decodable { let content: String }; let message: Message }; let choices: [Choice] }
+struct OllamaChatResponse: Decodable { let message: Message; struct Message: Decodable { let content: String } }
 
 enum KeychainStore {
     private static let service = Bundle.main.bundleIdentifier ?? "GhostGPT"
@@ -74,94 +78,203 @@ enum KeychainStore {
 }
 
 
+enum ModelProvider: String, CaseIterable, Identifiable {
+    case cloudflare = "Cloudflare"
+    case ollama = "Ollama"
+    case lmStudio = "LM Studio"
+    var id: String { rawValue }
+    var keychainAccount: String { self == .cloudflare ? "cloudflareAPIKey" : "localModelAPIKey" }
+}
+
 enum LocalModelClient {
+    private static let defaultCloudflareEndpoint = "https://ghostgpt-ai.conman31115.workers.dev"
+
+    static func validatedBaseURL(_ endpoint: String, provider: ModelProvider) throws -> URL {
+        let cleaned = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let components = URLComponents(string: cleaned),
+              components.scheme?.lowercased() == "https",
+              let host = components.host, !host.isEmpty,
+              components.user == nil, components.password == nil,
+              components.query == nil, components.fragment == nil,
+              let url = components.url else {
+            throw NSError(domain: "GhostGPT.ModelProvider", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "\(provider.rawValue) requires an HTTPS endpoint without embedded credentials, query parameters, or fragments."
+            ])
+        }
+        return url
+    }
+
+    private static func addBearer(_ token: String, to request: inout URLRequest) {
+        if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+    }
+
+    private static func updateSelectedModel(_ model: String, provider: ModelProvider) {
+        let defaults = UserDefaults.standard
+        switch provider {
+        case .cloudflare: defaults.set(model, forKey: "cloudflareModelID")
+        case .ollama: defaults.set(model, forKey: "ollamaModelID")
+        case .lmStudio: defaults.set(model, forKey: "lmStudioModelID")
+        }
+        defaults.set(model, forKey: "localModelID")
+    }
+
     static func chat(
+        provider providerName: String? = nil,
         endpoint: String,
         model: String,
         messages: [[String: String]],
         maxTokens: Int,
         timeout: TimeInterval
     ) async throws -> String {
-        let cleaned = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let base = URL(string: cleaned), base.scheme == "https", base.host != nil else {
-            throw NSError(domain: "GhostGPT.LocalModel", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Configure a valid private HTTPS LM Studio gateway in Settings → AI models."
-            ])
-        }
+        let selectedProvider = ModelProvider(
+            rawValue: providerName ?? UserDefaults.standard.string(forKey: "modelProvider") ?? ModelProvider.lmStudio.rawValue
+        ) ?? .lmStudio
+        let configuredEndpoint = selectedProvider == .cloudflare
+            ? (UserDefaults.standard.string(forKey: "serviceURL") ?? defaultCloudflareEndpoint)
+            : endpoint
+        let base = try validatedBaseURL(configuredEndpoint, provider: selectedProvider)
+        let apiKey = KeychainStore.migratedValue(for: selectedProvider.keychainAccount)
+        let selectedModelInput = model.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
-        var startRequest = URLRequest(url: base.appendingPathComponent("control/start"))
-        startRequest.httpMethod = "POST"
-        startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !apiKey.isEmpty {
-            startRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        }
-        startRequest.httpBody = Data("{}".utf8)
-        startRequest.timeoutInterval = 90
-        let (startData, startResponse) = try await URLSession.shared.data(for: startRequest)
-        guard let startHTTP = startResponse as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        guard (200..<300).contains(startHTTP.statusCode) else {
-            let detail = String(data: startData, encoding: .utf8) ?? "No details returned."
-            throw NSError(domain: "GhostGPT.LocalModel", code: startHTTP.statusCode, userInfo: [
-                NSLocalizedDescriptionKey: "PC model gateway startup failed (HTTP \(startHTTP.statusCode)). Check the bearer token and LM Studio readiness. \(String(detail.prefix(800)))"
-            ])
-        }
+        switch selectedProvider {
+        case .cloudflare:
+            let userMessage = messages.last(where: { $0["role"] == "user" })?["content"] ?? ""
+            guard !userMessage.isEmpty else {
+                throw NSError(domain: "GhostGPT.Cloudflare", code: 2, userInfo: [NSLocalizedDescriptionKey: "No user message was supplied to the Cloudflare provider."])
+            }
+            var request = URLRequest(url: base.appendingPathComponent("chat"))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            addBearer(apiKey, to: &request)
+            request.timeoutInterval = timeout
+            var payload: [String: Any] = [
+                "message": userMessage, "messages": messages,
+                "speed": UserDefaults.standard.string(forKey: "speedMode")?.lowercased() ?? "balanced",
+                "tools": []
+            ]
+            if !selectedModelInput.isEmpty { payload["model"] = selectedModelInput }
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard (200..<300).contains(http.statusCode) else {
+                let detail = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let providerError = try? JSONDecoder().decode(AIError.self, from: data)
+                throw NSError(domain: "GhostGPT.Cloudflare", code: http.statusCode, userInfo: [
+                    NSLocalizedDescriptionKey: "Cloudflare returned HTTP \(http.statusCode). \(providerError?.error ?? String(detail.prefix(1000)))"
+                ])
+            }
+            let reply: String
+            if let decoded = try? JSONDecoder().decode(AIReply.self, from: data) {
+                reply = decoded.reply
+            } else if let decoded = try? JSONDecoder().decode(OpenAIChatResponse.self, from: data) {
+                reply = decoded.choices.first?.message.content ?? ""
+            } else {
+                throw NSError(domain: "GhostGPT.Cloudflare", code: 3, userInfo: [
+                    NSLocalizedDescriptionKey: "Cloudflare returned an unsupported response. The /chat endpoint must return a reply field or an OpenAI-compatible chat response."
+                ])
+            }
+            let cleaned = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { throw NSError(domain: "GhostGPT.Cloudflare", code: 4, userInfo: [NSLocalizedDescriptionKey: "Cloudflare returned an empty reply."]) }
+            return cleaned
 
-        let inventory = (try? JSONSerialization.jsonObject(with: startData)) as? [String: Any]
-        let modelIDs = inventory?["models"] as? [String] ?? []
-        guard !modelIDs.isEmpty else {
-            throw NSError(domain: "GhostGPT.LocalModel", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "The PC gateway is reachable but reports no loaded LM Studio models."
+        case .ollama:
+            var inventoryRequest = URLRequest(url: base.appendingPathComponent("api/tags"))
+            inventoryRequest.timeoutInterval = min(timeout, 15)
+            addBearer(apiKey, to: &inventoryRequest)
+            let (inventoryData, inventoryResponse) = try await URLSession.shared.data(for: inventoryRequest)
+            guard let inventoryHTTP = inventoryResponse as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard (200..<300).contains(inventoryHTTP.statusCode) else {
+                let detail = String(data: inventoryData, encoding: .utf8) ?? ""
+                throw NSError(domain: "GhostGPT.Ollama", code: inventoryHTTP.statusCode, userInfo: [
+                    NSLocalizedDescriptionKey: "Ollama model inventory returned HTTP \(inventoryHTTP.statusCode). Check the authenticated gateway and Ollama readiness. \(String(detail.prefix(800)))"
+                ])
+            }
+            let modelIDs = try JSONDecoder().decode(OllamaTags.self, from: inventoryData).models.map(\.name).sorted()
+            guard !modelIDs.isEmpty else {
+                throw NSError(domain: "GhostGPT.Ollama", code: 5, userInfo: [NSLocalizedDescriptionKey: "Ollama is reachable but advertises no models. Pull or load a model, then scan again."])
+            }
+            let selectedModel = modelIDs.contains(selectedModelInput) ? selectedModelInput : modelIDs[0]
+            if selectedModel != selectedModelInput { updateSelectedModel(selectedModel, provider: .ollama) }
+            var request = URLRequest(url: base.appendingPathComponent("api/chat"))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            addBearer(apiKey, to: &request)
+            request.timeoutInterval = timeout
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "model": selectedModel, "stream": false, "think": false, "messages": messages,
+                "options": ["num_predict": maxTokens, "num_ctx": 4096]
             ])
-        }
-        let requestedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        let selectedModel: String
-        if modelIDs.contains(requestedModel) {
-            selectedModel = requestedModel
-        } else if modelIDs.contains("openai/gpt-oss-20b") {
-            selectedModel = "openai/gpt-oss-20b"
-        } else {
-            selectedModel = modelIDs.sorted().first ?? ""
-        }
-        guard !selectedModel.isEmpty else {
-            throw NSError(domain: "GhostGPT.LocalModel", code: 3, userInfo: [
-                NSLocalizedDescriptionKey: "No usable LM Studio model ID was returned by the gateway."
-            ])
-        }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard (200..<300).contains(http.statusCode) else {
+                let detail = String(data: data, encoding: .utf8) ?? ""
+                throw NSError(domain: "GhostGPT.Ollama", code: http.statusCode, userInfo: [
+                    NSLocalizedDescriptionKey: "Ollama chat returned HTTP \(http.statusCode). \(String(detail.prefix(1000)))"
+                ])
+            }
+            let reply = try JSONDecoder().decode(OllamaChatResponse.self, from: data).message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !reply.isEmpty else { throw NSError(domain: "GhostGPT.Ollama", code: 6, userInfo: [NSLocalizedDescriptionKey: "Ollama returned an empty reply."]) }
+            return reply
 
-        var request = URLRequest(url: base.appendingPathComponent("v1/chat/completions"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !apiKey.isEmpty {
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        }
-        request.timeoutInterval = timeout
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": selectedModel,
-            "stream": false,
-            "messages": messages,
-            "max_tokens": maxTokens
-        ])
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        guard (200..<300).contains(http.statusCode) else {
-            let detail = String(data: data, encoding: .utf8) ?? "No details returned."
-            throw NSError(domain: "GhostGPT.LocalModel", code: http.statusCode, userInfo: [
-                NSLocalizedDescriptionKey: "LM Studio returned HTTP \(http.statusCode). \(String(detail.prefix(1000)))"
+        case .lmStudio:
+            var startRequest = URLRequest(url: base.appendingPathComponent("control/start"))
+            startRequest.httpMethod = "POST"
+            startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            addBearer(apiKey, to: &startRequest)
+            startRequest.httpBody = Data("{}".utf8)
+            startRequest.timeoutInterval = min(max(timeout, 30), 90)
+            let (startData, startResponse) = try await URLSession.shared.data(for: startRequest)
+            guard let startHTTP = startResponse as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard (200..<300).contains(startHTTP.statusCode) else {
+                let detail = String(data: startData, encoding: .utf8) ?? ""
+                throw NSError(domain: "GhostGPT.LMStudio", code: startHTTP.statusCode, userInfo: [
+                    NSLocalizedDescriptionKey: "LM Studio gateway startup failed (HTTP \(startHTTP.statusCode)). Check the gateway token and PC model-server readiness. \(String(detail.prefix(800)))"
+                ])
+            }
+            let inventory = (try? JSONSerialization.jsonObject(with: startData)) as? [String: Any]
+            var modelIDs = inventory?["models"] as? [String] ?? []
+            if modelIDs.isEmpty {
+                var modelsRequest = URLRequest(url: base.appendingPathComponent("v1/models"))
+                addBearer(apiKey, to: &modelsRequest)
+                modelsRequest.timeoutInterval = min(timeout, 15)
+                let (modelsData, modelsResponse) = try await URLSession.shared.data(for: modelsRequest)
+                guard let modelsHTTP = modelsResponse as? HTTPURLResponse, (200..<300).contains(modelsHTTP.statusCode) else {
+                    throw NSError(domain: "GhostGPT.LMStudio", code: 7, userInfo: [NSLocalizedDescriptionKey: "LM Studio started but its /v1/models inventory could not be read."])
+                }
+                modelIDs = try JSONDecoder().decode(OpenAIModels.self, from: modelsData).data.map(\.id)
+            }
+            modelIDs = Array(Set(modelIDs.filter { !$0.isEmpty })).sorted()
+            guard !modelIDs.isEmpty else {
+                throw NSError(domain: "GhostGPT.LMStudio", code: 8, userInfo: [NSLocalizedDescriptionKey: "The PC gateway is reachable but reports no LM Studio models."])
+            }
+            let selectedModel: String
+            if modelIDs.contains(selectedModelInput) { selectedModel = selectedModelInput }
+            else if modelIDs.contains("openai/gpt-oss-20b") { selectedModel = "openai/gpt-oss-20b" }
+            else { selectedModel = modelIDs[0] }
+            if selectedModel != selectedModelInput { updateSelectedModel(selectedModel, provider: .lmStudio) }
+            var request = URLRequest(url: base.appendingPathComponent("v1/chat/completions"))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            addBearer(apiKey, to: &request)
+            request.timeoutInterval = timeout
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "model": selectedModel, "stream": false, "messages": messages, "max_tokens": maxTokens
             ])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard (200..<300).contains(http.statusCode) else {
+                let detail = String(data: data, encoding: .utf8) ?? ""
+                throw NSError(domain: "GhostGPT.LMStudio", code: http.statusCode, userInfo: [
+                    NSLocalizedDescriptionKey: "LM Studio returned HTTP \(http.statusCode). \(String(detail.prefix(1000)))"
+                ])
+            }
+            let reply = (try JSONDecoder().decode(OpenAIChatResponse.self, from: data)).choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !reply.isEmpty else { throw NSError(domain: "GhostGPT.LMStudio", code: 9, userInfo: [NSLocalizedDescriptionKey: "LM Studio returned an empty response."]) }
+            return reply
         }
-        let decoded = try JSONDecoder().decode(OpenAIChatResponse.self, from: data)
-        let reply = decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !reply.isEmpty else {
-            throw NSError(domain: "GhostGPT.LocalModel", code: 4, userInfo: [
-                NSLocalizedDescriptionKey: "LM Studio returned an empty response."
-            ])
-        }
-        return reply
     }
 }
-
 enum GhostTool: String, CaseIterable, Identifiable {
     case browser = "Browser"
     case powershell = "PowerShell"
@@ -209,8 +322,13 @@ struct GhostGPTRootView: View {
 
 struct ChatView: View {
     @AppStorage("speedMode") private var speedMode = "Balanced"
+    @AppStorage("modelProvider") private var modelProvider = "LM Studio"
+    @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
     @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
+    @AppStorage("cloudflareModelID") private var cloudflareModelID = ""
+    @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
+    @AppStorage("lmStudioModelID") private var lmStudioModelID = "openai/gpt-oss-20b"
     @AppStorage("autoStartPCModel") private var autoStartPCModel = true
     @AppStorage("enabledToolsJSON") private var enabledToolsJSON = "[\"Browser\"]"
     @AppStorage("savedChatsJSON") private var savedChatsJSON = "[]"
@@ -253,8 +371,13 @@ struct ChatView: View {
                         Text("Balanced").tag("Balanced")
                         Text("Deep").tag("Deep")
                     }
-                    Text("AI model: LM Studio on PC").font(.subheadline)
-                    Text("Chat requests use only the configured LM Studio-compatible gateway.").font(.footnote).foregroundStyle(.secondary)
+                    Picker("AI provider", selection: $modelProvider) {
+                        ForEach(ModelProvider.allCases) { provider in
+                            Text(provider.rawValue).tag(provider.rawValue)
+                        }
+                    }
+                    Text("Active provider: (modelProvider)").font(.subheadline)
+                    Text("Cloudflare uses its configured HTTPS Worker; Ollama and LM Studio use the authenticated private PC gateway.").font(.footnote).foregroundStyle(.secondary)
                     Divider()
                     ForEach(GhostTool.allCases) { tool in
                         Button { activeTool = tool } label: { Label(tool.rawValue, systemImage: tool.icon) }
@@ -386,10 +509,20 @@ struct ChatView: View {
         .background(Color(uiColor: .systemBackground))
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
-            guard autoStartPCModel, !attemptedAutoStart else { return }
+            guard modelProvider == ModelProvider.lmStudio.rawValue, autoStartPCModel, !attemptedAutoStart else { return }
             attemptedAutoStart = true
             Task { await startPCModelOnAppOpen() }
         }
+        .onChange(of: modelProvider) { oldValue, newValue in
+            saveModel(localModelID, for: oldValue)
+            localModelID = modelForProvider(newValue)
+            attemptedAutoStart = false
+            if newValue == ModelProvider.lmStudio.rawValue, autoStartPCModel {
+                attemptedAutoStart = true
+                Task { await startPCModelOnAppOpen() }
+            }
+        }
+        .onChange(of: localModelID) { _, value in saveModel(value, for: modelProvider) }
         .onChange(of: messages.count) { _ in persistCurrentChat() }
         .sheet(isPresented: $showingHistory) {
             ChatHistorySheet(
@@ -442,6 +575,22 @@ struct ChatView: View {
                         .padding(.horizontal, 12).padding(.vertical, 10).background(.white.opacity(0.07), in: Capsule())
                 }
             }.padding(.horizontal, 3)
+        }
+    }
+
+    private func modelForProvider(_ name: String) -> String {
+        switch ModelProvider(rawValue: name) ?? .lmStudio {
+        case .cloudflare: return cloudflareModelID
+        case .ollama: return ollamaModelID
+        case .lmStudio: return lmStudioModelID
+        }
+    }
+
+    private func saveModel(_ value: String, for name: String) {
+        switch ModelProvider(rawValue: name) ?? .lmStudio {
+        case .cloudflare: cloudflareModelID = value
+        case .ollama: ollamaModelID = value
+        case .lmStudio: lmStudioModelID = value
         }
     }
 
@@ -505,6 +654,7 @@ struct ChatView: View {
     }
 
     private func startPCModelOnAppOpen() async {
+        guard modelProvider == ModelProvider.lmStudio.rawValue else { return }
         let cleaned = localModelEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let base = URL(string: cleaned), base.scheme == "https" else { return }
         do {
@@ -547,57 +697,15 @@ struct ChatView: View {
     }
 
     private func sendToLocalModel(history: [[String: String]]) async throws {
-        let cleaned = localModelEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let base = URL(string: cleaned), base.scheme == "https" else {
-            throw NSError(domain: "GhostGPT", code: 2, userInfo: [NSLocalizedDescriptionKey: "Set a private HTTPS Tailscale URL for your PC's model gateway in Settings → AI models."])
-        }
-        try await ensurePCModelReady(base: base)
-        let selectedModel = localModelID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !selectedModel.isEmpty else {
-            throw NSError(domain: "GhostGPT", code: 6, userInfo: [NSLocalizedDescriptionKey: "No model is selected. Open Settings → AI models, scan the provider's inventory, and select an installed model."])
-        }
-        let path = "v1/chat/completions"
-        var request = URLRequest(url: base.appendingPathComponent(path))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
-        if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
-        request.timeoutInterval = speedMode == "Fast" ? 45 : 180
-        let localMessages: [[String: String]] = [[
-            "role": "system",
-            "content": "You are GhostGPT, a general-purpose assistant. Answer the user's message directly in clear natural language. Do not require the user to provide a prompt when one is already present. Do not return function-call JSON or tool arguments unless the user explicitly requests that format."
-        ]] + history
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": selectedModel,
-            "stream": false,
-            "messages": localMessages,
-            "max_tokens": speedMode == "Fast" ? 128 : 512
-        ])
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        guard (200..<300).contains(http.statusCode) else {
-            let responseBody = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let bodyDetail = responseBody.isEmpty ? "" : " Gateway response: \(String(responseBody.prefix(1200)))"
-            let explanation: String
-            switch http.statusCode {
-            case 401, 403:
-                explanation = "The model gateway rejected authentication (HTTP \(http.statusCode)). Check the API key in Settings → AI models." + bodyDetail
-            case 404:
-                explanation = "The model endpoint returned HTTP 404. Confirm the provider is correct and the gateway exposes /\(path)." + bodyDetail
-            case 502, 503, 504:
-                explanation = "The model gateway returned HTTP \(http.statusCode). It may be unable to reach LM Studio on the PC. Verify the model server is running, the gateway upstream URL is correct, and the selected model ID exists. Then scan model inventory and retry." + bodyDetail
-            default:
-                explanation = "Local model returned HTTP \(http.statusCode)." + bodyDetail
-            }
-            throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: explanation])
-        }
-        let reply: String
-        reply = try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message.content ?? "The local model returned an empty response."
-        let cleanedReply = reply.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanedReply.isEmpty else {
-            throw NSError(domain: "GhostGPT", code: 5, userInfo: [NSLocalizedDescriptionKey: "The local model returned an empty reply. Check the model gateway or try another model."])
-        }
-        messages.append(ChatMessage(text: cleanedReply, isUser: false))
+        let reply = try await LocalModelClient.chat(
+            provider: modelProvider,
+            endpoint: localModelEndpoint,
+            model: localModelID,
+            messages: history,
+            maxTokens: speedMode == "Fast" ? 128 : 512,
+            timeout: speedMode == "Fast" ? 45 : 180
+        )
+        messages.append(ChatMessage(text: reply, isUser: false))
     }
 }
 
@@ -1493,98 +1601,142 @@ struct PCModelServerSettingsView: View {
 }
 
 struct LocalModelsSettingsView: View {
+    @AppStorage("modelProvider") private var modelProvider = "LM Studio"
+    @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
     @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
-    @State private var localModelAPIKey = KeychainStore.migratedValue(for: "localModelAPIKey")
+    @AppStorage("cloudflareModelID") private var cloudflareModelID = ""
+    @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
+    @AppStorage("lmStudioModelID") private var lmStudioModelID = "openai/gpt-oss-20b"
+    @State private var providerAPIKey = ""
     @State private var availableModels: [String] = []
     @State private var status = "Model inventory has not been checked."
     @State private var loading = false
 
+    private var provider: ModelProvider { ModelProvider(rawValue: modelProvider) ?? .lmStudio }
+    private var activeEndpoint: Binding<String> {
+        Binding(get: { provider == .cloudflare ? serviceURL : localModelEndpoint },
+                set: { value in if provider == .cloudflare { serviceURL = value } else { localModelEndpoint = value } })
+    }
+
     var body: some View {
         Form {
             Section("Model provider") {
-                Text("LM Studio (PC)").font(.headline)
-                Text("GhostGPT uses only the configured LM Studio-compatible endpoint on your PC. No cloud chat fallback is used.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                if true {
-                    TextField("HTTPS Tailscale model gateway URL", text: $localModelEndpoint)
-                        .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
-                    SecureField("API key (if required)", text: $localModelAPIKey)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    TextField("Model ID", text: $localModelID)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Button { Task { await discoverModels() } } label: {
-                        Label(loading ? "Checking models…" : "Scan PC model inventory", systemImage: "arrow.clockwise")
-                    }.disabled(loading || localModelEndpoint.isEmpty)
-                    Text(status).font(.footnote).foregroundStyle(.secondary)
-                    if !availableModels.isEmpty {
-                        Picker("Installed model", selection: $localModelID) {
-                            ForEach(availableModels, id: \.self) { model in Text(model).tag(model) }
-                        }
+                Picker("Provider", selection: $modelProvider) {
+                    ForEach(ModelProvider.allCases) { item in Text(item.rawValue).tag(item.rawValue) }
+                }
+                TextField(provider == .cloudflare ? "Cloudflare Worker HTTPS URL" : "Private HTTPS Tailscale gateway URL", text: activeEndpoint)
+                    .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
+                SecureField(provider == .cloudflare ? "Cloudflare bearer token (optional)" : "PC gateway bearer token", text: $providerAPIKey)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("Active model ID (optional for Cloudflare)", text: $localModelID)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button { Task { await discoverModels() } } label: {
+                    Label(loading ? "Scanning models…" : "Scan provider model inventory", systemImage: "arrow.clockwise")
+                }.disabled(loading || activeEndpoint.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Text(status).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                if !availableModels.isEmpty {
+                    Picker("Available model", selection: $localModelID) {
+                        ForEach(availableModels, id: \.self) { model in Text(model).tag(model) }
                     }
                 }
             }
-            Section("PC model inventory (last checked)") {
-                Text("Previously detected model names are examples only and may be outdated. Press “Scan PC model inventory” above to retrieve the models currently advertised by your configured gateway.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                Text("Choose a model based on available PC memory, latency, and task complexity. The app connects to your local model only through the HTTPS gateway you configure; keep that gateway private to your Tailscale network.")
+            Section("Provider behavior") {
+                switch provider {
+                case .cloudflare:
+                    Text("Chat and agent planning use the HTTPS Worker /chat route. Inventory scanning expects the Worker to expose /v1/models; if it does not, enter a model ID manually or configure that route on the Worker.")
+                case .ollama:
+                    Text("Ollama model scanning uses /api/tags and chat uses /api/chat through the authenticated PC gateway. The gateway must be configured to reach Ollama on loopback port 11434.")
+                case .lmStudio:
+                    Text("LM Studio startup and inventory use the authenticated PC gateway /control/start and /v1/models routes. A saved model ID is replaced only when it is no longer advertised.")
+                }
+            }
+            Section("Remote access security") {
+                Text("All configured endpoints must use HTTPS. Keep Ollama and LM Studio on loopback behind Tailscale Serve and bearer authentication; do not expose raw model APIs to the public internet. Cloudflare credentials and PC gateway tokens are stored separately in iOS Keychain.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            Section("Network security") {
-                Text("Use a private HTTPS endpoint reachable through Tailscale. Do not publish the LM Studio API directly to the public internet. Model scanning runs only when you press the scan button.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-        }.navigationTitle("AI models")
-            .onChange(of: localModelAPIKey) { value in _ = KeychainStore.save(value, for: "localModelAPIKey") }
+        }
+        .navigationTitle("AI models")
+        .onAppear { providerAPIKey = KeychainStore.migratedValue(for: provider.keychainAccount) }
+        .onChange(of: modelProvider) { oldValue, newValue in
+            saveModel(localModelID, for: oldValue)
+            localModelID = modelForProvider(newValue)
+            providerAPIKey = KeychainStore.migratedValue(for: (ModelProvider(rawValue: newValue) ?? .lmStudio).keychainAccount)
+            availableModels = []
+            status = "Provider changed. Scan the new provider before relying on its model inventory."
+        }
+        .onChange(of: providerAPIKey) { _, value in _ = KeychainStore.save(value, for: provider.keychainAccount) }
+        .onChange(of: localModelID) { _, value in saveModel(value, for: modelProvider) }
+    }
+
+    private func modelForProvider(_ name: String) -> String {
+        switch ModelProvider(rawValue: name) ?? .lmStudio {
+        case .cloudflare: return cloudflareModelID
+        case .ollama: return ollamaModelID
+        case .lmStudio: return lmStudioModelID
+        }
+    }
+
+    private func saveModel(_ value: String, for name: String) {
+        switch ModelProvider(rawValue: name) ?? .lmStudio {
+        case .cloudflare: cloudflareModelID = value
+        case .ollama: ollamaModelID = value
+        case .lmStudio: lmStudioModelID = value
+        }
     }
 
     private func discoverModels() async {
-        let cleaned = localModelEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let base = URL(string: cleaned), base.scheme == "https" else {
-            status = "Enter a valid HTTPS Tailscale gateway URL."
+        guard let base = try? LocalModelClient.validatedBaseURL(activeEndpoint.wrappedValue, provider: provider) else {
+            status = "\(provider.rawValue) requires a valid HTTPS endpoint without embedded credentials."
             return
         }
         loading = true
         defer { loading = false }
         do {
-            let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
-            var startRequest = URLRequest(url: base.appendingPathComponent("control/start"))
-            startRequest.httpMethod = "POST"
-            startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            if !apiKey.isEmpty { startRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
-            startRequest.httpBody = Data("{}".utf8)
-            startRequest.timeoutInterval = 90
-            let (startData, startResponse) = try await URLSession.shared.data(for: startRequest)
-            guard let startHTTP = startResponse as? HTTPURLResponse, (200..<300).contains(startHTTP.statusCode) else {
-                let details = String(data: startData, encoding: .utf8) ?? "No details returned."
-                throw NSError(domain: "GhostGPT.PCModel", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not start the PC model server: \(String(details.prefix(500)))"])
-            }
-            let path = "v1/models"
-            var request = URLRequest(url: base.appendingPathComponent(path))
-            request.timeoutInterval = 12
-            if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-            guard (200..<300).contains(http.statusCode) else {
-                let body = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let detail = body.isEmpty ? "" : " Response: \(String(body.prefix(800)))"
-                throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Model inventory endpoint returned HTTP \(http.statusCode). Check the provider, gateway URL, and authentication." + detail])
-            }
-            availableModels = try JSONDecoder().decode(OpenAIModels.self, from: data).data.map(\.id).sorted()
-            if !availableModels.contains(localModelID) {
-                if availableModels.contains("openai/gpt-oss-20b") {
-                    localModelID = "openai/gpt-oss-20b"
-                } else if let first = availableModels.first {
-                    localModelID = first
+            let token = KeychainStore.migratedValue(for: provider.keychainAccount)
+            var modelIDs: [String] = []
+            if provider == .lmStudio {
+                var startRequest = URLRequest(url: base.appendingPathComponent("control/start"))
+                startRequest.httpMethod = "POST"
+                startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                if !token.isEmpty { startRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+                startRequest.httpBody = Data("{}".utf8)
+                startRequest.timeoutInterval = 90
+                let (startData, startResponse) = try await URLSession.shared.data(for: startRequest)
+                guard let startHTTP = startResponse as? HTTPURLResponse, (200..<300).contains(startHTTP.statusCode) else {
+                    let code = (startResponse as? HTTPURLResponse)?.statusCode ?? -1
+                    let body = String(data: startData, encoding: .utf8) ?? ""
+                    throw NSError(domain: "GhostGPT.ModelScan", code: code, userInfo: [NSLocalizedDescriptionKey: "LM Studio gateway startup failed. \(String(body.prefix(800)))"])
                 }
+                modelIDs = ((try? JSONSerialization.jsonObject(with: startData)) as? [String: Any])?["models"] as? [String] ?? []
+            } else {
+                let path = provider == .ollama ? "api/tags" : "v1/models"
+                var request = URLRequest(url: base.appendingPathComponent(path))
+                request.timeoutInterval = 15
+                if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                    let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                    let body = String(data: data, encoding: .utf8) ?? ""
+                    throw NSError(domain: "GhostGPT.ModelScan", code: code, userInfo: [NSLocalizedDescriptionKey: "\(provider.rawValue) inventory returned HTTP \(code). \(String(body.prefix(800)))"])
+                }
+                if provider == .ollama { modelIDs = try JSONDecoder().decode(OllamaTags.self, from: data).models.map(\.name) }
+                else { modelIDs = try JSONDecoder().decode(OpenAIModels.self, from: data).data.map(\.id) }
             }
-            status = "Found \(availableModels.count) model(s)."
+            availableModels = Array(Set(modelIDs.filter { !$0.isEmpty })).sorted()
+            guard !availableModels.isEmpty else {
+                throw NSError(domain: "GhostGPT.ModelScan", code: 10, userInfo: [NSLocalizedDescriptionKey: "\(provider.rawValue) is reachable but reports no models."])
+            }
+            if !availableModels.contains(localModelID) {
+                localModelID = availableModels.contains("openai/gpt-oss-20b") ? "openai/gpt-oss-20b" : availableModels[0]
+            }
+            status = "Found \(availableModels.count) model(s) for \(provider.rawValue)."
         } catch {
-            status = "Could not scan models: \(error.localizedDescription)"
+            availableModels = []
+            status = "Could not scan \(provider.rawValue) models: \(error.localizedDescription)"
         }
     }
 }
-
 struct AgentWorkspaceView: View {
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
@@ -1873,7 +2025,7 @@ struct AdvancedSettingsView: View {
     var body: some View {
         Form {
             Section("AI routing") {
-                Text("Chat, agent planning, and command drafting use the private LM Studio-compatible gateway configured under AI models. No cloud AI fallback is configured.")
+                Text("Chat, agent planning, and command drafting use the selected Cloudflare, Ollama, or LM Studio provider. Provider/model choices are kept separate; requests do not silently fall back to a different provider.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Performance") {
