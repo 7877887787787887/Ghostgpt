@@ -128,9 +128,10 @@ struct ChatView: View {
     @AppStorage("speedMode") private var speedMode = "Balanced"
     @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
-    @AppStorage("localModelID") private var localModelID = "gps-qwen3-fast-8b:latest"
+    @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
     @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
     @AppStorage("lmStudioModelID") private var lmStudioModelID = ""
+    @AppStorage("autoStartPCModel") private var autoStartPCModel = true
     @AppStorage("enabledToolsJSON") private var enabledToolsJSON = "[\"Browser\"]"
     @AppStorage("savedChatsJSON") private var savedChatsJSON = "[]"
     @State private var draft = ""
@@ -141,6 +142,7 @@ struct ChatView: View {
     @State private var showingTools = false
     @State private var showingHistory = false
     @State private var activeTool: GhostTool?
+    @State private var attemptedAutoStart = false
     @FocusState private var composerFocused: Bool
 
     private let quickPrompts = [
@@ -303,6 +305,11 @@ struct ChatView: View {
         }
         .background(Color(uiColor: .systemBackground))
         .toolbar(.hidden, for: .navigationBar)
+        .onAppear {
+            guard autoStartPCModel, !attemptedAutoStart else { return }
+            attemptedAutoStart = true
+            Task { await startPCModelOnAppOpen() }
+        }
         .onChange(of: modelProvider) { oldProvider, newProvider in
             if oldProvider == "Ollama" { ollamaModelID = localModelID }
             if oldProvider == "LM Studio" { lmStudioModelID = localModelID }
@@ -427,11 +434,51 @@ struct ChatView: View {
         composerFocused = true
     }
 
+    private func startPCModelOnAppOpen() async {
+        let cleaned = localModelEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let base = URL(string: cleaned), base.scheme == "https" else { return }
+        do {
+            try await ensurePCModelReady(base: base)
+        } catch {
+            errorText = "PC-only LM Studio startup failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func ensurePCModelReady(base: URL) async throws {
+        var startRequest = URLRequest(url: base.appendingPathComponent("control/start"))
+        startRequest.httpMethod = "POST"
+        startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        startRequest.timeoutInterval = 90
+        startRequest.httpBody = Data("{}".utf8)
+        let (startData, startResponse) = try await URLSession.shared.data(for: startRequest)
+        guard let startHTTP = startResponse as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(startHTTP.statusCode) else {
+            let detail = String(data: startData, encoding: .utf8) ?? "No gateway details were returned."
+            throw NSError(domain: "GhostGPT.PCModel", code: startHTTP.statusCode, userInfo: [NSLocalizedDescriptionKey: "The PC model service did not start (HTTP \(startHTTP.statusCode)): \(String(detail.prefix(500)))"])
+        }
+
+        var modelsRequest = URLRequest(url: base.appendingPathComponent("v1/models"))
+        modelsRequest.timeoutInterval = 15
+        let (modelsData, modelsResponse) = try await URLSession.shared.data(for: modelsRequest)
+        guard let modelsHTTP = modelsResponse as? HTTPURLResponse,
+              (200..<300).contains(modelsHTTP.statusCode) else {
+            throw NSError(domain: "GhostGPT.PCModel", code: 2, userInfo: [NSLocalizedDescriptionKey: "The PC gateway started, but its LM Studio model inventory could not be read."])
+        }
+        let modelIDs = try JSONDecoder().decode(OpenAIModels.self, from: modelsData).data.map(\.id)
+        guard !modelIDs.isEmpty else {
+            throw NSError(domain: "GhostGPT.PCModel", code: 3, userInfo: [NSLocalizedDescriptionKey: "LM Studio is running on the PC but advertises no models. Download or enable a model in LM Studio, then retry."])
+        }
+        if !modelIDs.contains(localModelID) {
+            localModelID = modelIDs.contains("openai/gpt-oss-20b") ? "openai/gpt-oss-20b" : (modelIDs.sorted().first ?? modelIDs[0])
+        }
+    }
+
     private func sendToLocalModel(history: [[String: String]]) async throws {
         let cleaned = localModelEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let base = URL(string: cleaned), base.scheme == "https" else {
             throw NSError(domain: "GhostGPT", code: 2, userInfo: [NSLocalizedDescriptionKey: "Set a private HTTPS Tailscale URL for your PC's model gateway in Settings → AI models."])
         }
+        try await ensurePCModelReady(base: base)
         let selectedModel = localModelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !selectedModel.isEmpty else {
             throw NSError(domain: "GhostGPT", code: 6, userInfo: [NSLocalizedDescriptionKey: "No model is selected. Open Settings → AI models, scan the provider's inventory, and select an installed model."])
@@ -1208,8 +1255,8 @@ struct SettingsView: View {
         List {
             Section("GhostGPT") {
                 Label("Native SwiftUI interface", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                Label("AI endpoint configured", systemImage: "cloud.fill").foregroundStyle(.blue)
-                Text("The endpoint is configured; connection status is checked when you send a message.")
+                Label("LM Studio on PC", systemImage: "desktopcomputer").foregroundStyle(.blue)
+                Text("Main chat runs through the LM Studio-compatible API on your PC only. No cloud chat fallback is used.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Preferences") {
@@ -1219,6 +1266,7 @@ struct SettingsView: View {
                 Toggle("Notifications", isOn: $notificationsEnabled)
             }
             Section("Tools") {
+                NavigationLink("PC model server (auto & manual)") { PCModelServerSettingsView() }
                 NavigationLink("Plugins & capabilities") { PluginsView() }
                 NavigationLink("AI models and local model scan") { LocalModelsSettingsView() }
                 NavigationLink("Terminal gateway (PowerShell / Linux SSH)") { TerminalGatewaySettingsView() }
@@ -1237,8 +1285,110 @@ struct SettingsView: View {
     }
 }
 
+
+struct PCModelServerSettingsView: View {
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
+    @AppStorage("autoStartPCModel") private var autoStartPCModel = true
+    @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
+    @State private var busy = false
+    @State private var status = "Checking the PC model server has not been run yet."
+
+    var body: some View {
+        Form {
+            Section("LM Studio on your PC") {
+                Label("PC-only model execution", systemImage: "desktopcomputer").font(.headline)
+                Text("Chat inference runs on your Windows PC in LM Studio. The iPhone only sends requests to this private Tailscale endpoint; it does not host a model.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Toggle("Start automatically when GhostGPT opens", isOn: $autoStartPCModel)
+                TextField("Private HTTPS PC endpoint", text: $localModelEndpoint)
+                    .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
+                Text("Default model: \\(localModelID)")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("Server controls") {
+                Button {
+                    Task { await startServerNow() }
+                } label: {
+                    Label(busy ? "Starting / checking…" : "Start PC model server now", systemImage: "power")
+                }.disabled(busy)
+                Button {
+                    Task { await refreshStatus() }
+                } label: {
+                    Label("Check server status", systemImage: "checkmark.icloud")
+                }.disabled(busy)
+                Text(status).font(.footnote).textSelection(.enabled)
+            }
+            Section("Startup behavior") {
+                Text("The PC has a Windows logon task to start LM Studio's local API and a separate local gateway. Opening GhostGPT checks the gateway and starts the API if it is stopped. The gateway listens only on the PC loopback interface and is published through the tailnet-only Tailscale endpoint.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("PC model server")
+        .onAppear { Task { await refreshStatus() } }
+    }
+
+    private func endpoint() -> URL? {
+        let cleaned = localModelEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: cleaned), url.scheme == "https", url.host != nil else { return nil }
+        return url
+    }
+
+    private func refreshStatus() async {
+        guard let base = endpoint() else {
+            status = "Enter the private HTTPS Tailscale URL for the PC model server."
+            return
+        }
+        busy = true
+        defer { busy = false }
+        do {
+            var request = URLRequest(url: base.appendingPathComponent("control/status"))
+            request.timeoutInterval = 12
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            if (200..<300).contains(http.statusCode) {
+                let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+                let count = object["model_count"] as? Int ?? 0
+                status = "PC model API is ready. \\(count) model ID(s) found."
+            } else {
+                status = "PC model API is not ready (HTTP \\(http.statusCode)). Press Start PC model server now to try to start it."
+            }
+        } catch {
+            status = "PC model endpoint is unreachable: \\(error.localizedDescription)"
+        }
+    }
+
+    private func startServerNow() async {
+        guard let base = endpoint() else {
+            status = "Enter a valid private HTTPS Tailscale endpoint first."
+            return
+        }
+        busy = true
+        defer { busy = false }
+        do {
+            var request = URLRequest(url: base.appendingPathComponent("control/start"))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = Data("{}".utf8)
+            request.timeoutInterval = 90
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard (200..<300).contains(http.statusCode) else {
+                status = "PC model start failed (HTTP \\(http.statusCode)): \\(String((String(data: data, encoding: .utf8) ?? "").prefix(500)))"
+                return
+            }
+            let modelIDs = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["models"] as? [String] ?? []
+            if !modelIDs.isEmpty && !modelIDs.contains(localModelID) {
+                localModelID = modelIDs.contains("openai/gpt-oss-20b") ? "openai/gpt-oss-20b" : (modelIDs.sorted().first ?? modelIDs[0])
+            }
+            status = "Started / verified LM Studio on the PC. Found \\(modelIDs.count) model ID(s). Active selection: \\(localModelID)."
+        } catch {
+            status = "Could not start the PC model server: \\(error.localizedDescription)"
+        }
+    }
+}
+
 struct LocalModelsSettingsView: View {
-    @AppStorage("modelProvider") private var modelProvider = "Cloudflare"
+    @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
     @AppStorage("localModelID") private var localModelID = "gps-qwen3-fast-8b:latest"
     @State private var localModelAPIKey = KeychainStore.migratedValue(for: "localModelAPIKey")
@@ -1293,6 +1443,16 @@ struct LocalModelsSettingsView: View {
         loading = true
         defer { loading = false }
         do {
+            var startRequest = URLRequest(url: base.appendingPathComponent("control/start"))
+            startRequest.httpMethod = "POST"
+            startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            startRequest.httpBody = Data("{}".utf8)
+            startRequest.timeoutInterval = 90
+            let (startData, startResponse) = try await URLSession.shared.data(for: startRequest)
+            guard let startHTTP = startResponse as? HTTPURLResponse, (200..<300).contains(startHTTP.statusCode) else {
+                let details = String(data: startData, encoding: .utf8) ?? "No details returned."
+                throw NSError(domain: "GhostGPT.PCModel", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not start the PC model server: \(String(details.prefix(500)))"])
+            }
             let path = "v1/models"
             var request = URLRequest(url: base.appendingPathComponent(path))
             request.timeoutInterval = 12
