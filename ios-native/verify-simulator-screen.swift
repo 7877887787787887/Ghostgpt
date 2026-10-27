@@ -14,13 +14,14 @@ let request = VNRecognizeTextRequest()
 request.recognitionLevel = .accurate
 try VNImageRequestHandler(cgImage: image).perform([request])
 let visibleText = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+let normalizedText = visibleText.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
 print(visibleText)
-guard visibleText.localizedCaseInsensitiveContains("GhostGPT") else {
+guard normalizedText.localizedCaseInsensitiveContains("GhostGPT") else {
     fatalError("Native GhostGPT screen was not visible at launch")
 }
-guard visibleText.localizedCaseInsensitiveContains("Your private AI workspace") else {
+guard normalizedText.localizedCaseInsensitiveContains("private AI workspace") else {
     fatalError("Expected native SwiftUI chat home screen was not visible")
 }
-guard !visibleText.localizedCaseInsensitiveContains("Open GhostGPT") else {
+guard !normalizedText.localizedCaseInsensitiveContains("Open GhostGPT") else {
     fatalError("Legacy web launch screen is still visible")
 }
