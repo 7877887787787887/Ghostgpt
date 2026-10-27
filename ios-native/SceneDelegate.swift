@@ -427,9 +427,6 @@ struct ChatView: View {
                         "speed": speedMode.lowercased(),
                         "tools": enabledTools
                     ]
-                    if !localModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        payload["model"] = localModelID
-                    }
                     request.httpBody = try JSONSerialization.data(withJSONObject: payload)
                     let (data, response) = try await URLSession.shared.data(for: request)
                     guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
@@ -717,7 +714,7 @@ struct ToolsView: View {
     var body: some View {
         List {
             Section("Agent workspace") {
-                NavigationLink { AgentWorkspaceView() } label: { Label("AI agent loop (preview)", systemImage: "sparkles") }
+                NavigationLink { AgentWorkspaceView() } label: { Label("AI agent loop (PowerShell)", systemImage: "sparkles") }
             }
             Section("Built-in tools") {
                 NavigationLink { BrowserView() } label: { Label("Ghost Browser", systemImage: "globe") }
