@@ -1374,35 +1374,74 @@ struct LocalModelsSettingsView: View {
 
 struct AgentWorkspaceView: View {
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
+    @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
     @State private var goal = ""
     @State private var plan = ""
     @State private var status = "Ready"
     @State private var busy = false
+    @State private var preparingStep = false
+    @State private var executingStep = false
+    @State private var showingRiskConfirmation = false
     @AppStorage("agentSavedGoal") private var savedGoal = ""
     @AppStorage("agentSavedPlan") private var savedPlan = ""
     @AppStorage("agentSavedStatus") private var savedStatus = "Ready"
     @AppStorage("agentSavedLogJSON") private var savedLogJSON = "[]"
+    @AppStorage("agentPendingCommand") private var proposedCommand = ""
+    @AppStorage("agentPendingPurpose") private var proposalPurpose = ""
+    @AppStorage("agentPendingRisk") private var proposalRisk = "read-only"
+    @AppStorage("agentPendingExpectedResult") private var expectedResult = ""
+    @AppStorage("agentRemoteHost") private var remoteHost = "msi"
+    @AppStorage("agentRemoteUsername") private var remoteUsername = ""
+    @AppStorage("agentStepIndex") private var stepIndex = 0
+    @AppStorage("agentComplete") private var agentComplete = false
     @State private var runLog: [String] = []
-    @State private var approved = false
-    @State private var showResetConfirmation = false
+
+    private var proposedActionIsRisky: Bool {
+        let command = proposedCommand.lowercased()
+        let risk = proposalRisk.lowercased()
+        if risk.contains("change") || risk.contains("write") || risk.contains("high") || risk.contains("destructive") || risk.contains("modify") {
+            return true
+        }
+        let markers = [
+            "remove-item", "clear-content", "format-volume", "format-disk",
+            "restart-computer", "stop-computer", "shutdown", "set-executionpolicy",
+            "disable-", "reg delete", "invoke-expression", "iex ", "remove-"
+        ]
+        return markers.contains { command.contains($0) }
+    }
 
     var body: some View {
         Form {
             Section("Goal") {
                 TextField("What should GhostGPT accomplish?", text: $goal, axis: .vertical)
                     .lineLimit(3...6)
-                Toggle("Allow tool execution after reviewing each action", isOn: $approved)
                 Button {
                     Task { await createPlan() }
                 } label: {
                     Label(busy ? "Planning…" : "Plan task", systemImage: "sparkles")
-                }
-                .disabled(busy || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }.disabled(busy || preparingStep || executingStep || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button {
+                    Task { await prepareNextStep() }
+                } label: {
+                    Label(preparingStep ? "Preparing next action…" : "Prepare next PowerShell action", systemImage: "arrow.trianglehead.2.clockwise")
+                }.disabled(busy || preparingStep || executingStep || agentComplete || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Text("GhostGPT can propose one command at a time through your configured PowerShell gateway. It never runs a proposal automatically.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("Remote target") {
+                TextField("Windows host or session name", text: $remoteHost)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("Username (if required by gateway)", text: $remoteUsername)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Text("Every command requires an explicit approval. Potentially risky commands require a second confirmation. Gateway output is saved in the local run log; avoid commands that print secrets.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Agent status") {
                 Text(status)
-                Text("This first stage creates an execution plan. It does not silently run commands. Tool execution, result inspection, retries, and resumable jobs are being added as separate verified stages.")
-                    .font(.footnote).foregroundStyle(.secondary)
+                if agentComplete {
+                    Label("The AI judged the goal may be complete. Review the run log before relying on that conclusion.", systemImage: "checkmark.circle")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             }
             if !plan.isEmpty {
                 Section("Proposed plan") {
@@ -1410,19 +1449,45 @@ struct AgentWorkspaceView: View {
                     Button("Copy plan") { UIPasteboard.general.string = plan }
                 }
             }
+            if !proposedCommand.isEmpty {
+                Section("Review proposed action") {
+                    Text(proposalPurpose.isEmpty ? "Proposed PowerShell command" : proposalPurpose)
+                        .font(.headline)
+                    Text("Risk: \(proposalRisk)").font(.subheadline.weight(.semibold))
+                        .foregroundStyle(proposedActionIsRisky ? .orange : .secondary)
+                    if !expectedResult.isEmpty {
+                        Text("Expected result: \(expectedResult)").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    TextEditor(text: $proposedCommand)
+                        .font(.system(.footnote, design: .monospaced)).frame(minHeight: 90)
+                    Button {
+                        if proposedActionIsRisky {
+                            showingRiskConfirmation = true
+                        } else {
+                            Task { await executeApprovedStep() }
+                        }
+                    } label: {
+                        Label(executingStep ? "Executing…" : "Approve and run step", systemImage: "checkmark.shield")
+                    }.disabled(executingStep || preparingStep || proposedCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || remoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Discard proposal", role: .destructive) {
+                        proposedCommand = ""
+                        status = "Proposal discarded. No command was run."
+                    }.disabled(executingStep)
+                }
+            }
             if !runLog.isEmpty {
-                Section("Run log") {
+                Section("Resumable run log (\(runLog.count) entries)") {
                     ForEach(Array(runLog.enumerated()), id: \.offset) { item in
                         Text(item.element).font(.footnote).textSelection(.enabled)
                     }
                     Button("Clear log", role: .destructive) { runLog.removeAll() }
                 }
             }
-            Section("Connected tools") {
-                NavigationLink("MCP connectors") { MCPConnectorView() }
-                NavigationLink("PowerShell gateway") { TerminalGatewayView(mode: "powershell") }
-                NavigationLink("Linux sandbox / SSH") { TerminalGatewayView(mode: "ssh") }
-                NavigationLink("Browser") { BrowserView() }
+            Section("Available execution tool") {
+                Label("Configured PowerShell HTTPS gateway", systemImage: "terminal")
+                Text("This agent stage executes only through the configured gateway. MCP, browser, and SSH tools are not invoked by this loop yet.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                NavigationLink("Configure PowerShell gateway") { TerminalGatewaySettingsView() }
             }
         }
         .navigationTitle("AI Agent")
@@ -1438,18 +1503,29 @@ struct AgentWorkspaceView: View {
         .onChange(of: plan) { value in savedPlan = value }
         .onChange(of: status) { value in savedStatus = value }
         .onChange(of: runLog) { value in
-            savedLogJSON = String(data: (try? JSONEncoder().encode(value)) ?? Data("[]".utf8), encoding: .utf8) ?? "[]"
+            savedLogJSON = String(data: (try? JSONEncoder().encode(Array(value.prefix(100)))) ?? Data("[]".utf8), encoding: .utf8) ?? "[]"
+        }
+        .confirmationDialog("Run a potentially risky PowerShell command?", isPresented: $showingRiskConfirmation, titleVisibility: .visible) {
+            Button("Run risky command", role: .destructive) { Task { await executeApprovedStep() } }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("The proposed command may change the remote computer. Review the command carefully before confirming.")
         }
     }
 
     @MainActor
     private func createPlan() async {
+        let cleanGoal = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanGoal.isEmpty else { return }
         busy = true
-        status = "Requesting plan from AI service…"
+        status = "Requesting a plan from the AI service…"
+        proposedCommand = ""
+        agentComplete = false
+        stepIndex = 0
         defer { busy = false }
         do {
-            guard let url = URL(string: serviceURL.trimmingCharacters(in: .whitespacesAndNewlines) + "/chat"),
-                  url.scheme == "https" else {
+            let base = serviceURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard let url = URL(string: base + "/chat"), url.scheme == "https" else {
                 throw NSError(domain: "GhostGPTAgent", code: 1, userInfo: [NSLocalizedDescriptionKey: "AI service URL must be HTTPS."])
             }
             var request = URLRequest(url: url)
@@ -1457,27 +1533,147 @@ struct AgentWorkspaceView: View {
             request.timeoutInterval = 90
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let instruction = """
-            You are the planner for GhostGPT, an agentic assistant. Create a safe, actionable plan for this goal:
-            \(goal)
-            Return 3-8 numbered steps. For each step state the intended action, the tool or evidence needed, what result would count as success, and a recovery path if it fails. Mark steps requiring user approval. Do not claim to execute tools. Prefer read-only inspection before changes. Keep the plan concise.
+            You are the planning component of GhostGPT. Create a safe, actionable plan for this goal:
+            \(cleanGoal)
+            Return 3-8 numbered steps. For each step state the intended action, evidence needed, success criteria, and a recovery path. Do not claim that you executed any tools. Do not request a function call or return tool-call JSON; respond with an ordinary readable plan. Prefer read-only inspection first.
             """
-            request.httpBody = try JSONSerialization.data(withJSONObject: ["message": instruction, "messages": [["role": "user", "content": instruction]], "speed": "balanced", "tools": ["Browser", "MCP", "PowerShell", "SSH"]])
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "message": instruction,
+                "messages": [["role": "user", "content": instruction]],
+                "speed": "balanced",
+                "tools": []
+            ])
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw NSError(domain: "GhostGPTAgent", code: 2, userInfo: [NSLocalizedDescriptionKey: "No HTTP response from AI service."])
             }
             guard (200...299).contains(http.statusCode) else {
-                throw NSError(domain: "GhostGPTAgent", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "AI service returned HTTP \(http.statusCode)."])
+                let body = String(data: data, encoding: .utf8)?.prefix(800) ?? ""
+                throw NSError(domain: "GhostGPTAgent", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "AI service returned HTTP \(http.statusCode). \(body)"])
             }
             let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let text = (object?["reply"] as? String) ?? (object?["response"] as? String) ?? (object?["message"] as? String) ?? String(data: data, encoding: .utf8) ?? "Empty response."
-            plan = text
+            let responseText = (object?["reply"] as? String) ?? (object?["response"] as? String) ?? (object?["message"] as? String) ?? String(data: data, encoding: .utf8) ?? "Empty response."
+            plan = responseText
             status = "Plan received. No tools have been executed."
-            runLog.insert("Created plan for goal: \(goal)", at: 0)
+            runLog.insert("Created plan for goal: \(cleanGoal)", at: 0)
+            runLog = Array(runLog.prefix(100))
         } catch {
             status = "Planning failed: \(error.localizedDescription)"
             runLog.insert(status, at: 0)
             runLog = Array(runLog.prefix(100))
+        }
+    }
+
+    @MainActor
+    private func prepareNextStep() async {
+        let cleanGoal = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanGoal.isEmpty, !agentComplete else { return }
+        preparingStep = true
+        status = "Planning the next action from the latest run results…"
+        defer { preparingStep = false }
+        do {
+            let base = serviceURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard let url = URL(string: base + "/chat"), url.scheme == "https" else {
+                throw NSError(domain: "GhostGPTAgent", code: 3, userInfo: [NSLocalizedDescriptionKey: "AI service URL must be HTTPS."])
+            }
+            let recentLog = runLog.prefix(12).reversed().joined(separator: "\n\n")
+            let instruction = """
+            You are GhostGPT's bounded PowerShell agent. Goal: \(cleanGoal)
+            Current plan:
+            \(plan)
+            Recent execution results, newest last:
+            \(recentLog.isEmpty ? "(No commands have been run yet.)" : recentLog)
+            Remote host alias: \(remoteHost)
+            Propose exactly ONE next PowerShell command that safely advances the goal. Use observed output to inspect success or recover from failures. Prefer read-only diagnostics. Never use encoded/obfuscated commands, credential dumping, exfiltration, deletion, formatting, security disabling, or policy bypass. If a necessary action would modify the system, mark risk as "changes" and explain it. If the goal appears complete based on evidence, set complete to true and command to an empty string.
+            Return JSON only with keys: {"purpose":"short explanation","command":"one PowerShell command or empty string","risk":"read-only or changes","expectedResult":"observable outcome","complete":false}. Do not return a function call or Markdown fences.
+            """
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 90
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "message": instruction,
+                "messages": [["role": "user", "content": instruction]],
+                "speed": "balanced",
+                "tools": []
+            ])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard (200...299).contains(http.statusCode) else {
+                let body = String(data: data, encoding: .utf8)?.prefix(800) ?? ""
+                throw NSError(domain: "GhostGPTAgent", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "AI service returned HTTP \(http.statusCode). \(body)"])
+            }
+            let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let raw = (object?["reply"] as? String) ?? (object?["response"] as? String) ?? (object?["message"] as? String) ?? String(data: data, encoding: .utf8) ?? ""
+            guard let firstBrace = raw.firstIndex(of: "{"), let lastBrace = raw.lastIndex(of: "}"), firstBrace <= lastBrace,
+                  let proposalData = String(raw[firstBrace...lastBrace]).data(using: .utf8),
+                  let proposal = try JSONSerialization.jsonObject(with: proposalData) as? [String: Any] else {
+                throw NSError(domain: "GhostGPTAgent", code: 4, userInfo: [NSLocalizedDescriptionKey: "The AI did not return the required JSON action proposal. No command was run."])
+            }
+            if (proposal["complete"] as? Bool) == true {
+                proposedCommand = ""
+                agentComplete = true
+                status = "The AI judged the goal may be complete based on the logged evidence. Review the run log."
+                runLog.insert("Agent proposed completion after reviewing the latest results.", at: 0)
+                runLog = Array(runLog.prefix(100))
+                return
+            }
+            guard let command = proposal["command"] as? String, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw NSError(domain: "GhostGPTAgent", code: 5, userInfo: [NSLocalizedDescriptionKey: "The AI proposal did not contain a runnable command. No command was run."])
+            }
+            proposedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+            proposalPurpose = (proposal["purpose"] as? String) ?? "Next PowerShell action"
+            proposalRisk = (proposal["risk"] as? String) ?? "review carefully"
+            expectedResult = (proposal["expectedResult"] as? String) ?? ""
+            status = "Action proposed. Review it and explicitly approve it before execution."
+            runLog.insert("Proposed step \(stepIndex + 1): \(proposalPurpose) [risk: \(proposalRisk)]", at: 0)
+            runLog = Array(runLog.prefix(100))
+        } catch {
+            status = "Next-step planning failed: \(error.localizedDescription)"
+            runLog.insert(status, at: 0)
+            runLog = Array(runLog.prefix(100))
+        }
+    }
+
+    @MainActor
+    private func executeApprovedStep() async {
+        let submitted = proposedCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !submitted.isEmpty, !remoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let url = URL(string: gatewayURL.trimmingCharacters(in: .whitespacesAndNewlines)), url.scheme == "https", url.host != nil else {
+            status = "Configure a valid HTTPS PowerShell gateway in Settings. No command was run."
+            return
+        }
+        executingStep = true
+        defer { executingStep = false }
+        do {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let token = KeychainStore.migratedValue(for: "terminalGatewayToken")
+            if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+            request.timeoutInterval = 60
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "mode": "powershell",
+                "host": remoteHost,
+                "username": remoteUsername,
+                "command": submitted
+            ])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            let body = String(data: data, encoding: .utf8) ?? "(Non-text response)"
+            let success = (200...299).contains(http.statusCode)
+            runLog.insert("Step \(stepIndex + 1) \(success ? "returned success" : "failed")\nPurpose: \(proposalPurpose)\nCommand: \(submitted)\nHTTP \(http.statusCode)\nOutput: \(String(body.prefix(3000)))", at: 0)
+            runLog = Array(runLog.prefix(100))
+            if success { stepIndex += 1 }
+            proposedCommand = ""
+            status = success ? "Step returned HTTP success. Inspecting output and preparing the next proposal…" : "Step failed. Inspecting the error and preparing a recovery proposal…"
+            await prepareNextStep()
+        } catch {
+            runLog.insert("Step \(stepIndex + 1) could not reach the gateway: \(error.localizedDescription)", at: 0)
+            runLog = Array(runLog.prefix(100))
+            proposedCommand = ""
+            status = "Gateway request failed. Preparing a recovery proposal; no result was received."
+            await prepareNextStep()
         }
     }
 }
