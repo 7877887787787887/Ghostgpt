@@ -1450,8 +1450,11 @@ struct AgentWorkspaceView: View {
                 Section("Review proposed action") {
                     Text(proposalPurpose.isEmpty ? "Proposed PowerShell command" : proposalPurpose)
                         .font(.headline)
-                    Text("Risk: \(proposalRisk)").font(.subheadline.weight(.semibold))
-                        .foregroundStyle(proposedActionIsRisky ? .orange : .secondary)
+                    if proposedActionIsRisky {
+                        Text("Risk: \(proposalRisk)").font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+                    } else {
+                        Text("Risk: \(proposalRisk)").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    }
                     if !expectedResult.isEmpty {
                         Text("Expected result: \(expectedResult)").font(.footnote).foregroundStyle(.secondary)
                     }
