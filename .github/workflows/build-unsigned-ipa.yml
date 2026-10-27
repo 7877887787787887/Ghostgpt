@@ -26,11 +26,20 @@ jobs:
           grep -q 'configuration.delegateClass = SceneDelegate.self' ios-native/AppDelegate.swift
           grep -q 'UIHostingController(rootView: GhostGPTRootView())' ios-native/SceneDelegate.swift
           ! grep -q 'Open GhostGPT' ios-native/AppDelegate.swift ios-native/SceneDelegate.swift
+          grep -q 'ghostgpt-ai.conman31115.workers.dev' ios-native/SceneDelegate.swift
+          grep -q 'URLSession.shared.data' ios-native/SceneDelegate.swift
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
+
+      - name: Verify Cloudflare AI response
+        shell: bash
+        run: |
+          set -euo pipefail
+          response=$(curl -fsS --retry 2 --max-time 45 -X POST 'https://ghostgpt-ai.conman31115.workers.dev/chat' -H 'Content-Type: application/json' --data '{"message":"Reply with exactly: Cloudflare AI verified"}')
+          echo "$response" | grep -q 'Cloudflare AI verified'
 
       - name: Generate Capacitor iOS project
         run: |
