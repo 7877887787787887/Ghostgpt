@@ -509,8 +509,12 @@ struct TerminalGatewayView: View {
     @State private var host = ""
     @State private var username = ""
     @State private var command = ""
+    @State private var taskDescription = ""
     @State private var output = "Connect a trusted terminal gateway in Settings to execute commands. No command has been run."
     @State private var running = false
+    @State private var drafting = false
+    @AppStorage("serviceURL") private var aiServiceURL = "https://ghostgpt-ai.conman31115.workers.dev"
+    @AppStorage("speedMode") private var speedMode = "Balanced"
     @State private var showingSettings = false
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -539,6 +543,15 @@ struct TerminalGatewayView: View {
                         Image(systemName: running ? "hourglass" : "arrow.up.circle.fill").font(.title)
                     }.disabled(running || command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || host.isEmpty)
                 }
+                TextField("Describe a task for AI to draft a command…", text: $taskDescription, axis: .vertical)
+                    .textFieldStyle(.roundedBorder).lineLimit(1...3)
+                Button {
+                    Task { await draftCommand() }
+                } label: {
+                    Label(drafting ? "Drafting…" : "Draft command with AI", systemImage: "sparkles")
+                }.buttonStyle(.bordered).disabled(drafting || taskDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Text("AI drafts only. Review the command above before pressing Run.")
+                    .font(.caption2).foregroundStyle(.secondary)
                 Button("Change gateway") { showingSettings = true }.font(.caption)
             }
             Spacer()
@@ -549,6 +562,36 @@ struct TerminalGatewayView: View {
             .sheet(isPresented: $showingSettings) {
                 NavigationStack { TerminalGatewaySettingsView().toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingSettings = false } } } }
             }
+    }
+
+    private func draftCommand() async {
+        let task = taskDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !task.isEmpty else { return }
+        drafting = true
+        defer { drafting = false }
+        do {
+            guard let base = URL(string: aiServiceURL), base.scheme == "https" else {
+                throw NSError(domain: "GhostGPT", code: 4, userInfo: [NSLocalizedDescriptionKey: "Configure a valid HTTPS AI service URL in Settings."])
+            }
+            var request = URLRequest(url: base.appendingPathComponent("chat"))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.timeoutInterval = speedMode == "Fast" ? 25 : 75
+            let shell = mode == "ssh" ? "POSIX shell" : "Windows PowerShell"
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "message": "Draft exactly one \(shell) command for this task: \(task). Return only the command, no Markdown fences or explanation. Prefer read-only inspection. Do not use destructive commands, change security settings, delete files, or expose credentials.",
+                "speed": speedMode.lowercased(),
+                "tools": []
+            ])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                  let answer = try? JSONDecoder().decode(AIReply.self, from: data) else {
+                throw NSError(domain: "GhostGPT", code: 5, userInfo: [NSLocalizedDescriptionKey: "AI could not draft a command."])
+            }
+            command = answer.reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            output += "\n\nAI command draft failed: \(error.localizedDescription)"
+        }
     }
 
     private func execute() async {
