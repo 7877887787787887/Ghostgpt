@@ -164,7 +164,7 @@ struct ChatView: View {
                             }
                         }.padding(.horizontal, 16).padding(.vertical, 20)
                     }
-                    .onChange(of: messages.count) { _, _ in
+                    .onChange(of: messages.count) { _ in
                         if let last = messages.last { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) } }
                     }
                 }
@@ -359,7 +359,6 @@ struct EmbeddedBrowser: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let view = WKWebView()
         view.allowsBackForwardNavigationGestures = true
-        view.isInspectable = false
         return view
     }
     func updateUIView(_ webView: WKWebView, context: Context) {
