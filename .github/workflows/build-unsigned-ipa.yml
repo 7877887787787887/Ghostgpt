@@ -45,6 +45,7 @@ jobs:
           cp ios-native/AppDelegate.swift ios/App/App/AppDelegate.swift
           cp ios-native/SceneDelegate.swift ios/App/App/SceneDelegate.swift
           rm -rf ios/App/App/public
+          mkdir -p ios/App/App/public
           test ! -e ios/App/App/public/index.html
 
       - name: Build and launch on iOS Simulator
