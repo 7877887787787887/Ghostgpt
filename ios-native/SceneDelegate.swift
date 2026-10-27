@@ -624,6 +624,9 @@ struct EmbeddedBrowser: UIViewRepresentable {
 struct ToolsView: View {
     var body: some View {
         List {
+            Section("Agent workspace") {
+                NavigationLink { AgentWorkspaceView() } label: { Label("AI agent loop (preview)", systemImage: "sparkles") }
+            }
             Section("Built-in tools") {
                 NavigationLink { BrowserView() } label: { Label("Ghost Browser", systemImage: "globe") }
                 NavigationLink { TerminalGatewayView(mode: "powershell") } label: { Label("PowerShell terminal", systemImage: "terminal") }
@@ -1156,6 +1159,96 @@ struct LocalModelsSettingsView: View {
             status = "Found \(availableModels.count) model(s)."
         } catch {
             status = "Could not scan models: \(error.localizedDescription)"
+        }
+    }
+}
+
+struct AgentWorkspaceView: View {
+    @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
+    @State private var goal = ""
+    @State private var plan = ""
+    @State private var status = "Ready"
+    @State private var busy = false
+    @State private var runLog: [String] = []
+    @State private var approved = false
+
+    var body: some View {
+        Form {
+            Section("Goal") {
+                TextField("What should GhostGPT accomplish?", text: $goal, axis: .vertical)
+                    .lineLimit(3...6)
+                Toggle("Allow tool execution after reviewing each action", isOn: $approved)
+                Button {
+                    Task { await createPlan() }
+                } label: {
+                    Label(busy ? "Planning…" : "Plan task", systemImage: "sparkles")
+                }
+                .disabled(busy || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            Section("Agent status") {
+                Text(status)
+                Text("This first stage creates an execution plan. It does not silently run commands. Tool execution, result inspection, retries, and resumable jobs are being added as separate verified stages.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if !plan.isEmpty {
+                Section("Proposed plan") {
+                    Text(plan).textSelection(.enabled)
+                    Button("Copy plan") { UIPasteboard.general.string = plan }
+                }
+            }
+            if !runLog.isEmpty {
+                Section("Run log") {
+                    ForEach(Array(runLog.enumerated()), id: \.offset) { item in
+                        Text(item.element).font(.footnote).textSelection(.enabled)
+                    }
+                    Button("Clear log", role: .destructive) { runLog.removeAll() }
+                }
+            }
+            Section("Connected tools") {
+                NavigationLink("MCP connectors") { MCPConnectorView() }
+                NavigationLink("PowerShell gateway") { TerminalGatewayView(mode: "powershell") }
+                NavigationLink("Linux sandbox / SSH") { TerminalGatewayView(mode: "ssh") }
+                NavigationLink("Browser") { BrowserView() }
+            }
+        }
+        .navigationTitle("AI Agent")
+    }
+
+    @MainActor
+    private func createPlan() async {
+        busy = true
+        status = "Requesting plan from AI service…"
+        defer { busy = false }
+        do {
+            guard let url = URL(string: serviceURL.trimmingCharacters(in: .whitespacesAndNewlines) + "/chat"),
+                  url.scheme == "https" else {
+                throw NSError(domain: "GhostGPTAgent", code: 1, userInfo: [NSLocalizedDescriptionKey: "AI service URL must be HTTPS."])
+            }
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 90
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let instruction = """
+            You are the planner for GhostGPT, an agentic assistant. Create a safe, actionable plan for this goal:
+            \(goal)
+            Return 3-8 numbered steps. For each step state the intended action, the tool or evidence needed, what result would count as success, and a recovery path if it fails. Mark steps requiring user approval. Do not claim to execute tools. Prefer read-only inspection before changes. Keep the plan concise.
+            """
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["message": instruction])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw NSError(domain: "GhostGPTAgent", code: 2, userInfo: [NSLocalizedDescriptionKey: "No HTTP response from AI service."])
+            }
+            guard (200...299).contains(http.statusCode) else {
+                throw NSError(domain: "GhostGPTAgent", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "AI service returned HTTP \(http.statusCode)."])
+            }
+            let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let text = (object?["response"] as? String) ?? (object?["message"] as? String) ?? String(data: data, encoding: .utf8) ?? "Empty response."
+            plan = text
+            status = "Plan received. No tools have been executed."
+            runLog.insert("Created plan for goal: \(goal)", at: 0)
+        } catch {
+            status = "Planning failed: \(error.localizedDescription)"
+            runLog.insert(status, at: 0)
         }
     }
 }
