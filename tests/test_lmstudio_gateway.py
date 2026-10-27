@@ -96,6 +96,36 @@ class GatewayAuthenticationTests(unittest.TestCase):
         }):
             self.assertEqual(gateway.load_gateway_token(), "file-token")
 
+    def test_oversized_request_is_rejected_before_proxy(self):
+        handler = FakeHandler(
+            path="/v1/chat/completions",
+            method="POST",
+            headers={
+                "Authorization": "Bearer correct-test-token",
+                "Content-Type": "application/json",
+                "Content-Length": str(gateway.MAX_BODY_BYTES + 1),
+            },
+        )
+        with patch.object(gateway.http.client, "HTTPConnection") as upstream:
+            gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.responses[0][0], 413)
+        upstream.assert_not_called()
+
+    def test_invalid_content_length_is_rejected(self):
+        handler = FakeHandler(
+            path="/v1/chat/completions",
+            method="POST",
+            headers={
+                "Authorization": "Bearer correct-test-token",
+                "Content-Type": "application/json",
+                "Content-Length": "not-a-number",
+            },
+        )
+        with patch.object(gateway.http.client, "HTTPConnection") as upstream:
+            gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.responses[0][0], 400)
+        upstream.assert_not_called()
+
     def test_gateway_bearer_is_not_forwarded_to_lm_studio(self):
         handler = FakeHandler(
             path="/v1/chat/completions",
