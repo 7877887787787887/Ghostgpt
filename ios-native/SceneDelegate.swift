@@ -1225,10 +1225,10 @@ struct AgentWorkspaceView: View {
                 runLog = (try? JSONDecoder().decode([String].self, from: Data(savedLogJSON.utf8))) ?? []
             }
         }
-        .onChange(of: goal) { _, value in savedGoal = value }
-        .onChange(of: plan) { _, value in savedPlan = value }
-        .onChange(of: status) { _, value in savedStatus = value }
-        .onChange(of: runLog) { _, value in
+        .onChange(of: goal) { value in savedGoal = value }
+        .onChange(of: plan) { value in savedPlan = value }
+        .onChange(of: status) { value in savedStatus = value }
+        .onChange(of: runLog) { value in
             savedLogJSON = String(data: (try? JSONEncoder().encode(value)) ?? Data("[]".utf8), encoding: .utf8) ?? "[]"
         }
     }
