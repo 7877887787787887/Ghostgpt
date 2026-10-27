@@ -921,7 +921,7 @@ struct TerminalGatewayView: View {
                     Label(checkingGateway ? "Checking connection…" : "Test gateway connection", systemImage: "network")
                 }.buttonStyle(.bordered).disabled(checkingGateway)
                 Text(gatewayStatus).font(.caption).foregroundStyle(.secondary)
-                Text("The automatic check sends only an HTTPS HEAD request. It never runs a PowerShell or SSH command; a gateway may need a dedicated health endpoint to report full readiness.")
+                Text("The authenticated HEAD check reports whether PowerShell is available. It never runs a command.")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
             Spacer()
@@ -965,13 +965,15 @@ struct TerminalGatewayView: View {
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
             switch http.statusCode {
             case 200..<300:
-                gatewayStatus = "Endpoint responds to HTTPS (HTTP \(http.statusCode)). Reachability is confirmed; PowerShell execution is not tested."
+                gatewayStatus = "Authenticated gateway is reachable and PowerShell is available (HTTP \(http.statusCode)). No command was run."
             case 401, 403:
                 gatewayStatus = "Gateway is reachable but rejected authentication (HTTP \(http.statusCode)). Check the bearer token in Settings."
             case 404:
                 gatewayStatus = "Gateway host is reachable, but this endpoint path returned HTTP 404. Check the configured URL."
             case 405:
                 gatewayStatus = "Gateway is reachable, but HEAD health checks are unsupported (HTTP 405). A dedicated health endpoint is needed to confirm readiness."
+            case 503:
+                gatewayStatus = "Gateway is reachable and authenticated, but PowerShell is unavailable or not ready. Check Windows PowerShell and the gateway startup log."
             case 500..<600:
                 gatewayStatus = "Gateway responded with HTTP \(http.statusCode). The service or its upstream may not be ready."
             default:

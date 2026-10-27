@@ -34,7 +34,7 @@ BLOCKED_COMMAND_MARKERS = (
     "-encodedcommand", "frombase64string", "invoke-expression", "iex ",
     "scriptblock::create", "downloadstring", "downloadfile", "webclient",
     "invoke-webrequest", "start-bitstransfer", "convertfrom-securestring",
-    "get-credential", "credentialmanager",
+    "get-credential", "credentialmanager", "::",
 )
 RISKY_COMMAND_MARKERS = (
     "set-", "new-", "remove-", "add-", "clear-", "format-", "restart-", "stop-",
@@ -42,7 +42,7 @@ RISKY_COMMAND_MARKERS = (
     "out-file", "set-content", "add-content", "reg add", "reg delete", "net user",
     "sc config", "shutdown", "taskkill", "install-", "uninstall-",
 )
-COMPOUND_COMMAND_MARKERS = (";", "|", "\n", "\r", "&&", "||", "`", "<", ">", "&")
+COMPOUND_COMMAND_MARKERS = (";", "|", "\n", "\r", "&&", "||", "`", "<", ">", "&", "$(", "(", ")", "{", "}", "[", "]")
 
 def powershell_executable():
     if not IS_WINDOWS:
@@ -54,8 +54,8 @@ def powershell_executable():
     return shutil.which(configured) or ""
 
 def allowed_powershell_hosts():
-    raw = os.environ.get("GHOSTGPT_POWERSHELL_HOSTS", "msi,localhost,127.0.0.1")
-    hosts = {item.strip().casefold() for item in raw.split(",") if item.strip()}
+    # This service executes locally; do not let an environment variable turn it into a remote host runner.
+    hosts = {"msi", "localhost", "127.0.0.1"}
     computer_name = os.environ.get("COMPUTERNAME", "").strip().casefold()
     if computer_name:
         hosts.add(computer_name)
@@ -377,5 +377,10 @@ class Handler(BaseHTTPRequestHandler):
                 conn.close()
 
 if __name__ == "__main__":
+    if load_gateway_token():
+        logging.info("Gateway bearer token is configured; no secret value will be logged.")
+    else:
+        logging.error("Gateway bearer token is missing; all authenticated routes will fail closed.")
+    logging.info("PowerShell readiness at startup: %s", bool(powershell_executable()))
     logging.info("Starting loopback gateway on %s:%d; LM Studio upstream %s:%d", HOST, PORT, UPSTREAM_HOST, UPSTREAM_PORT)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

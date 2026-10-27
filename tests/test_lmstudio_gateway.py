@@ -245,6 +245,28 @@ class GatewayAuthenticationTests(unittest.TestCase):
         self.assertEqual(handler.status, 200)
         self.assertEqual(handler.wfile.getvalue(), b"")
 
+    def test_terminal_rejects_nested_powershell_expressions(self):
+        handler = self._terminal_handler({
+            "mode": "powershell", "host": "msi",
+            "command": "Get-Process -Name $(Remove-Item C:\\temp)", "approved": True
+        })
+        with patch.object(gateway, "IS_WINDOWS", True), \\
+             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \\
+             patch.object(gateway.subprocess, "run", side_effect=AssertionError("must not execute")):
+            gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.responses[0][0], 403)
+
+    def test_terminal_host_allowlist_cannot_be_expanded_by_environment(self):
+        handler = self._terminal_handler({
+            "mode": "powershell", "host": "evil-host", "command": "Get-Process", "approved": True
+        })
+        with patch.object(gateway, "IS_WINDOWS", True), \\
+             patch.object(gateway, "powershell_executable", return_value="powershell.exe"), \\
+             patch.dict(os.environ, {"GHOSTGPT_POWERSHELL_HOSTS": "evil-host"}), \\
+             patch.object(gateway.subprocess, "run", side_effect=AssertionError("must not execute")):
+            gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.responses[0][0], 403)
+
     def test_terminal_gateway_explicitly_rejects_ssh_mode(self):
         handler = self._terminal_handler({
             "mode": "ssh", "host": "Ghost", "command": "whoami", "approved": True

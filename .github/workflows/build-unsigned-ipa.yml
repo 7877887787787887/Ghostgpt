@@ -50,6 +50,7 @@ jobs:
           grep -q 'def handle_terminal' windows/lmstudio_gateway.py
           grep -q 'def do_HEAD' windows/lmstudio_gateway.py
           grep -q 'riskConfirmed' windows/lmstudio_gateway.py
+          grep -q 'PowerShell readiness at startup' windows/lmstudio_gateway.py
           grep -q '"approved": true' ios-native/SceneDelegate.swift
 
       - name: Set up Node.js
