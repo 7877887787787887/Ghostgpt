@@ -129,7 +129,7 @@ struct ChatView: View {
     @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
     @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
-    @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
+    @AppStorage("ollamaModelID") private var ollamaModelID = "openai/gpt-oss-20b"
     @AppStorage("lmStudioModelID") private var lmStudioModelID = ""
     @AppStorage("autoStartPCModel") private var autoStartPCModel = true
     @AppStorage("enabledToolsJSON") private var enabledToolsJSON = "[\"Browser\"]"
@@ -1390,7 +1390,7 @@ struct PCModelServerSettingsView: View {
 struct LocalModelsSettingsView: View {
     @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
-    @AppStorage("localModelID") private var localModelID = "gps-qwen3-fast-8b:latest"
+    @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
     @State private var localModelAPIKey = KeychainStore.migratedValue(for: "localModelAPIKey")
     @State private var availableModels: [String] = []
     @State private var status = "Model inventory has not been checked."
@@ -1466,7 +1466,13 @@ struct LocalModelsSettingsView: View {
                 throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Model inventory endpoint returned HTTP \(http.statusCode). Check the provider, gateway URL, and authentication." + detail])
             }
             availableModels = try JSONDecoder().decode(OpenAIModels.self, from: data).data.map(\.id).sorted()
-            if !availableModels.contains(localModelID), let first = availableModels.first { localModelID = first }
+            if !availableModels.contains(localModelID) {
+                if availableModels.contains("openai/gpt-oss-20b") {
+                    localModelID = "openai/gpt-oss-20b"
+                } else if let first = availableModels.first {
+                    localModelID = first
+                }
+            }
             status = "Found \(availableModels.count) model(s)."
         } catch {
             status = "Could not scan models: \(error.localizedDescription)"
