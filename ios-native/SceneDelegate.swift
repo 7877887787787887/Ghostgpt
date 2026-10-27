@@ -126,7 +126,7 @@ struct GhostGPTRootView: View {
 struct ChatView: View {
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("speedMode") private var speedMode = "Balanced"
-    @AppStorage("modelProvider") private var modelProvider = "Cloudflare"
+    @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
     @AppStorage("localModelID") private var localModelID = "gps-qwen3-fast-8b:latest"
     @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
@@ -171,11 +171,8 @@ struct ChatView: View {
                         Text("Balanced").tag("Balanced")
                         Text("Deep").tag("Deep")
                     }
-                    Picker("AI model source", selection: $modelProvider) {
-                        Text("Cloud AI").tag("Cloudflare")
-                        Text("Ollama on PC").tag("Ollama")
-                        Text("LM Studio on PC").tag("LM Studio")
-                    }
+                    Text("AI model: LM Studio on PC").font(.subheadline)
+                    Text("Chat requests use only the configured LM Studio-compatible gateway.").font(.footnote).foregroundStyle(.secondary)
                     Divider()
                     ForEach(GhostTool.allCases) { tool in
                         Button { activeTool = tool } label: { Label(tool.rawValue, systemImage: tool.icon) }
@@ -413,36 +410,7 @@ struct ChatView: View {
                 let history = messages.suffix(24).map {
                     ["role": $0.isUser ? "user" : "assistant", "content": String($0.text.prefix(12000))]
                 }
-                if modelProvider == "Cloudflare" {
-                    guard let baseURL = URL(string: serviceURL), baseURL.scheme == "https" else {
-                        throw NSError(domain: "GhostGPT", code: 1, userInfo: [NSLocalizedDescriptionKey: "Use a valid HTTPS service URL in Settings."])
-                    }
-                    var request = URLRequest(url: baseURL.appendingPathComponent("chat"))
-                    request.httpMethod = "POST"
-                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    request.timeoutInterval = speedMode == "Fast" ? 25 : 75
-                    var payload: [String: Any] = [
-                        "message": text,
-                        "messages": history,
-                        "speed": speedMode.lowercased(),
-                        "tools": enabledTools
-                    ]
-                    request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-                    let (data, response) = try await URLSession.shared.data(for: request)
-                    guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-                    if (200..<300).contains(http.statusCode), let answer = try? JSONDecoder().decode(AIReply.self, from: data) {
-                        let cleanedReply = answer.reply.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !cleanedReply.isEmpty else {
-                            throw NSError(domain: "GhostGPT", code: 4, userInfo: [NSLocalizedDescriptionKey: "The AI service returned an empty reply. Retry the request or switch models."])
-                        }
-                        messages.append(ChatMessage(text: cleanedReply, isUser: false))
-                    } else {
-                        let serviceError = try? JSONDecoder().decode(AIError.self, from: data)
-                        throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: serviceError?.error ?? "The AI service returned HTTP \(http.statusCode)."])
-                    }
-                } else {
-                    try await sendToLocalModel(history: history)
-                }
+                try await sendToLocalModel(history: history)
             } catch {
                 errorText = error.localizedDescription == "The operation couldn’t be completed. (NSURLErrorDomain error -1009.)"
                     ? "No internet connection. Reconnect and try again."
@@ -468,7 +436,7 @@ struct ChatView: View {
         guard !selectedModel.isEmpty else {
             throw NSError(domain: "GhostGPT", code: 6, userInfo: [NSLocalizedDescriptionKey: "No model is selected. Open Settings → AI models, scan the provider's inventory, and select an installed model."])
         }
-        let path = modelProvider == "Ollama" ? "api/chat" : "v1/chat/completions"
+        let path = "v1/chat/completions"
         var request = URLRequest(url: base.appendingPathComponent(path))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -479,22 +447,12 @@ struct ChatView: View {
             "role": "system",
             "content": "You are GhostGPT, a general-purpose assistant. Answer the user's message directly in clear natural language. Do not require the user to provide a prompt when one is already present. Do not return function-call JSON or tool arguments unless the user explicitly requests that format."
         ]] + history
-        if modelProvider == "Ollama" {
-            request.httpBody = try JSONSerialization.data(withJSONObject: [
-                "model": selectedModel,
-                "stream": false,
-                "think": false,
-                "messages": localMessages,
-                "options": ["num_predict": speedMode == "Fast" ? 128 : 512, "num_ctx": 4096]
-            ])
-        } else {
-            request.httpBody = try JSONSerialization.data(withJSONObject: [
-                "model": selectedModel,
-                "stream": false,
-                "messages": localMessages,
-                "max_tokens": speedMode == "Fast" ? 128 : 512
-            ])
-        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": selectedModel,
+            "stream": false,
+            "messages": localMessages,
+            "max_tokens": speedMode == "Fast" ? 128 : 512
+        ])
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         guard (200..<300).contains(http.statusCode) else {
@@ -514,11 +472,7 @@ struct ChatView: View {
             throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: explanation])
         }
         let reply: String
-        if modelProvider == "Ollama" {
-            reply = try JSONDecoder().decode(OllamaChatResponse.self, from: data).message.content
-        } else {
-            reply = try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message.content ?? "The local model returned an empty response."
-        }
+        reply = try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message.content ?? "The local model returned an empty response."
         let cleanedReply = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedReply.isEmpty else {
             throw NSError(domain: "GhostGPT", code: 5, userInfo: [NSLocalizedDescriptionKey: "The local model returned an empty reply. Check the model gateway or try another model."])
@@ -1295,12 +1249,10 @@ struct LocalModelsSettingsView: View {
     var body: some View {
         Form {
             Section("Model provider") {
-                Picker("Provider", selection: $modelProvider) {
-                    Text("Cloudflare AI").tag("Cloudflare")
-                    Text("Ollama (PC)").tag("Ollama")
-                    Text("LM Studio (PC)").tag("LM Studio")
-                }
-                if modelProvider != "Cloudflare" {
+                Text("LM Studio (PC)").font(.headline)
+                Text("Cloudflare and Ollama chat providers are disabled. GhostGPT uses the LM Studio-compatible endpoint below.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                if true {
                     TextField("HTTPS Tailscale model gateway URL", text: $localModelEndpoint)
                         .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
                     SecureField("API key (if required)", text: $localModelAPIKey)
@@ -1316,9 +1268,6 @@ struct LocalModelsSettingsView: View {
                             ForEach(availableModels, id: \.self) { model in Text(model).tag(model) }
                         }
                     }
-                } else {
-                    Text("Cloudflare AI uses the configured GhostGPT Worker. Choose Ollama or LM Studio to use models hosted on your PC.")
-                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
             Section("PC model inventory (last checked)") {
@@ -1344,7 +1293,7 @@ struct LocalModelsSettingsView: View {
         loading = true
         defer { loading = false }
         do {
-            let path = modelProvider == "Ollama" ? "api/tags" : "v1/models"
+            let path = "v1/models"
             var request = URLRequest(url: base.appendingPathComponent(path))
             request.timeoutInterval = 12
         let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
@@ -1356,11 +1305,7 @@ struct LocalModelsSettingsView: View {
                 let detail = body.isEmpty ? "" : " Response: \(String(body.prefix(800)))"
                 throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Model inventory endpoint returned HTTP \(http.statusCode). Check the provider, gateway URL, and authentication." + detail])
             }
-            if modelProvider == "Ollama" {
-                availableModels = try JSONDecoder().decode(OllamaTags.self, from: data).models.map(\.name).sorted()
-            } else {
-                availableModels = try JSONDecoder().decode(OpenAIModels.self, from: data).data.map(\.id).sorted()
-            }
+            availableModels = try JSONDecoder().decode(OpenAIModels.self, from: data).data.map(\.id).sorted()
             if !availableModels.contains(localModelID), let first = availableModels.first { localModelID = first }
             status = "Found \(availableModels.count) model(s)."
         } catch {
