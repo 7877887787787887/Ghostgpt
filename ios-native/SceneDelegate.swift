@@ -1302,7 +1302,7 @@ struct PCModelServerSettingsView: View {
                 Toggle("Start automatically when GhostGPT opens", isOn: $autoStartPCModel)
                 TextField("Private HTTPS PC endpoint", text: $localModelEndpoint)
                     .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
-                Text("Default model: \\(localModelID)")
+                Text("Default model: \(localModelID)")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Server controls") {
@@ -1348,12 +1348,12 @@ struct PCModelServerSettingsView: View {
             if (200..<300).contains(http.statusCode) {
                 let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
                 let count = object["model_count"] as? Int ?? 0
-                status = "PC model API is ready. \\(count) model ID(s) found."
+                status = "PC model API is ready. \(count) model ID(s) found."
             } else {
-                status = "PC model API is not ready (HTTP \\(http.statusCode)). Press Start PC model server now to try to start it."
+                status = "PC model API is not ready (HTTP \(http.statusCode)). Press Start PC model server now to try to start it."
             }
         } catch {
-            status = "PC model endpoint is unreachable: \\(error.localizedDescription)"
+            status = "PC model endpoint is unreachable: \(error.localizedDescription)"
         }
     }
 
@@ -1373,16 +1373,16 @@ struct PCModelServerSettingsView: View {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
             guard (200..<300).contains(http.statusCode) else {
-                status = "PC model start failed (HTTP \\(http.statusCode)): \\(String((String(data: data, encoding: .utf8) ?? "").prefix(500)))"
+                status = "PC model start failed (HTTP \(http.statusCode)): \(String((String(data: data, encoding: .utf8) ?? "").prefix(500)))"
                 return
             }
             let modelIDs = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["models"] as? [String] ?? []
             if !modelIDs.isEmpty && !modelIDs.contains(localModelID) {
                 localModelID = modelIDs.contains("openai/gpt-oss-20b") ? "openai/gpt-oss-20b" : (modelIDs.sorted().first ?? modelIDs[0])
             }
-            status = "Started / verified LM Studio on the PC. Found \\(modelIDs.count) model ID(s). Active selection: \\(localModelID)."
+            status = "Started / verified LM Studio on the PC. Found \(modelIDs.count) model ID(s). Active selection: \(localModelID)."
         } catch {
-            status = "Could not start the PC model server: \\(error.localizedDescription)"
+            status = "Could not start the PC model server: \(error.localizedDescription)"
         }
     }
 }
