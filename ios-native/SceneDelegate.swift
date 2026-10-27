@@ -452,6 +452,10 @@ struct ChatView: View {
         guard let base = URL(string: cleaned), base.scheme == "https" else {
             throw NSError(domain: "GhostGPT", code: 2, userInfo: [NSLocalizedDescriptionKey: "Set a private HTTPS Tailscale URL for your PC's model gateway in Settings → AI models."])
         }
+        let selectedModel = localModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !selectedModel.isEmpty else {
+            throw NSError(domain: "GhostGPT", code: 6, userInfo: [NSLocalizedDescriptionKey: "No model is selected. Open Settings → AI models, scan the provider's inventory, and select an installed model."])
+        }
         let path = modelProvider == "Ollama" ? "api/chat" : "v1/chat/completions"
         var request = URLRequest(url: base.appendingPathComponent(path))
         request.httpMethod = "POST"
@@ -459,26 +463,43 @@ struct ChatView: View {
         let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
         if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         request.timeoutInterval = speedMode == "Fast" ? 45 : 180
+        let localMessages: [[String: String]] = [[
+            "role": "system",
+            "content": "You are GhostGPT, a general-purpose assistant. Answer the user's message directly in clear natural language. Do not require the user to provide a prompt when one is already present. Do not return function-call JSON or tool arguments unless the user explicitly requests that format."
+        ]] + history
         if modelProvider == "Ollama" {
             request.httpBody = try JSONSerialization.data(withJSONObject: [
-                "model": localModelID,
+                "model": selectedModel,
                 "stream": false,
                 "think": false,
-                "messages": history,
+                "messages": localMessages,
                 "options": ["num_predict": speedMode == "Fast" ? 128 : 512, "num_ctx": 4096]
             ])
         } else {
             request.httpBody = try JSONSerialization.data(withJSONObject: [
-                "model": localModelID,
+                "model": selectedModel,
                 "stream": false,
-                "messages": history,
+                "messages": localMessages,
                 "max_tokens": speedMode == "Fast" ? 128 : 512
             ])
         }
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         guard (200..<300).contains(http.statusCode) else {
-            throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Local model returned HTTP \(http.statusCode): \(String(data: data, encoding: .utf8) ?? "No response body")"])
+            let responseBody = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let bodyDetail = responseBody.isEmpty ? "" : " Gateway response: \(String(responseBody.prefix(1200)))"
+            let explanation: String
+            switch http.statusCode {
+            case 401, 403:
+                explanation = "The model gateway rejected authentication (HTTP \(http.statusCode)). Check the API key in Settings → AI models." + bodyDetail
+            case 404:
+                explanation = "The model endpoint returned HTTP 404. Confirm the provider is correct and the gateway exposes /\(path)." + bodyDetail
+            case 502, 503, 504:
+                explanation = "The model gateway returned HTTP \(http.statusCode). It may be unable to reach the upstream Ollama/LM Studio service. Verify the model server is running, the gateway upstream URL is correct, and the selected model ID exists. Then scan model inventory and retry." + bodyDetail
+            default:
+                explanation = "Local model returned HTTP \(http.statusCode)." + bodyDetail
+            }
+            throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: explanation])
         }
         let reply: String
         if modelProvider == "Ollama" {
@@ -1266,8 +1287,11 @@ struct LocalModelsSettingsView: View {
         let apiKey = KeychainStore.migratedValue(for: "localModelAPIKey")
         if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                throw NSError(domain: "GhostGPT", code: 3, userInfo: [NSLocalizedDescriptionKey: "Model inventory endpoint did not return success."])
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard (200..<300).contains(http.statusCode) else {
+                let body = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let detail = body.isEmpty ? "" : " Response: \(String(body.prefix(800)))"
+                throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Model inventory endpoint returned HTTP \(http.statusCode). Check the provider, gateway URL, and authentication." + detail])
             }
             if modelProvider == "Ollama" {
                 availableModels = try JSONDecoder().decode(OllamaTags.self, from: data).models.map(\.name).sorted()
