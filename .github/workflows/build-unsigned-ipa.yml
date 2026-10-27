@@ -110,7 +110,7 @@ jobs:
       - name: Upload verified simulator screenshot
         uses: actions/upload-artifact@v4
         with:
-          name: GhostGPT-native-launch-screenshot
-          path: artifacts/native-launch.png
+          name: GhostGPT-native-launch-screenshots
+          path: artifacts/native-launch-*.png
           if-no-files-found: error
           retention-days: 14
