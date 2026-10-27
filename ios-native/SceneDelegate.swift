@@ -1,6 +1,16 @@
 import UIKit
 import SwiftUI
 
+struct ChatMessage: Identifiable {
+    let id = UUID()
+    let text: String
+    let isUser: Bool
+}
+
+struct AIReply: Decodable { let reply: String }
+
+struct AIError: Decodable { let error: String }
+
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
 
@@ -33,9 +43,11 @@ struct GhostGPTRootView: View {
 }
 
 struct ChatView: View {
+    @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @State private var draft = ""
-    @State private var messages: [(String, Bool)] = []
+    @State private var messages: [ChatMessage] = []
     @State private var isConnecting = false
+    @State private var errorText: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,20 +55,29 @@ struct ChatView: View {
                 Spacer()
                 Image(systemName: "sparkles").font(.system(size: 44)).foregroundStyle(.blue)
                 Text("GhostGPT").font(.largeTitle.bold()).padding(.top, 12)
-                Text("Native iOS workspace").foregroundStyle(.secondary).padding(.top, 4)
+                Text("Your private AI workspace").foregroundStyle(.secondary).padding(.top, 4)
                 Text("Ask a question to get started.").foregroundStyle(.secondary).padding(.top, 18)
                 Spacer()
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(Array(messages.enumerated()), id: \.offset) { _, item in
-                            Text(item.0).padding(12)
-                                .background(item.1 ? Color.blue : Color(uiColor: .secondarySystemBackground))
+                        ForEach(messages) { message in
+                            Text(message.text).padding(12)
+                                .background(message.isUser ? Color.blue : Color(uiColor: .secondarySystemBackground))
                                 .clipShape(RoundedRectangle(cornerRadius: 16))
-                                .frame(maxWidth: .infinity, alignment: item.1 ? .trailing : .leading)
+                                .frame(maxWidth: .infinity, alignment: message.isUser ? .trailing : .leading)
+                        }
+                        if isConnecting {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                Text("GhostGPT is thinking…").foregroundStyle(.secondary)
+                            }.padding(12)
                         }
                     }.padding()
                 }
+            }
+            if let errorText {
+                Text(errorText).font(.footnote).foregroundStyle(.red).padding(.horizontal)
             }
             HStack(spacing: 10) {
                 TextField("Message GhostGPT…", text: $draft, axis: .vertical)
@@ -64,7 +85,7 @@ struct ChatView: View {
                     .background(Color(uiColor: .secondarySystemBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                 Button { send() } label: {
-                    Image(systemName: isConnecting ? "hourglass" : "arrow.up.circle.fill").font(.system(size: 28))
+                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 28))
                 }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isConnecting)
             }.padding()
         }
@@ -74,10 +95,34 @@ struct ChatView: View {
     private func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        messages.append((text, true)); draft = ""; isConnecting = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            messages.append(("Native UI is ready. Connect your GhostGPT service API to enable responses.", false))
-            isConnecting = false
+        messages.append(ChatMessage(text: text, isUser: true))
+        draft = ""
+        errorText = nil
+        isConnecting = true
+
+        Task {
+            defer { isConnecting = false }
+            do {
+                guard let baseURL = URL(string: serviceURL) else {
+                    throw URLError(.badURL)
+                }
+                let url = baseURL.appendingPathComponent("chat")
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.timeoutInterval = 45
+                request.httpBody = try JSONEncoder().encode(["message": text])
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+                if (200..<300).contains(http.statusCode), let answer = try? JSONDecoder().decode(AIReply.self, from: data) {
+                    messages.append(ChatMessage(text: answer.reply, isUser: false))
+                } else {
+                    let serviceError = try? JSONDecoder().decode(AIError.self, from: data)
+                    throw NSError(domain: "GhostGPT", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: serviceError?.error ?? "The AI service could not answer right now."])
+                }
+            } catch {
+                errorText = "Couldn’t reach GhostGPT. Check your connection or service address."
+            }
         }
     }
 }
@@ -88,8 +133,8 @@ struct SettingsView: View {
         List {
             Section("Connection") {
                 Label("Native SwiftUI interface", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                Label("Cloudflare-ready deployment", systemImage: "cloud.fill").foregroundStyle(.blue)
-                Label("Service API not configured", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Label("Cloudflare AI service", systemImage: "cloud.fill").foregroundStyle(.blue)
+                Label("Cloudflare AI connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
             }
             Section("Preferences") { Toggle("Notifications", isOn: $notificationsEnabled) }
             Section("Advanced") {
@@ -106,7 +151,7 @@ struct SettingsView: View {
 }
 
 struct AdvancedSettingsView: View {
-    @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt.live"
+    @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("cloudflareEnabled") private var cloudflareEnabled = true
     @AppStorage("debugLogging") private var debugLogging = false
     var body: some View {
@@ -119,7 +164,7 @@ struct AdvancedSettingsView: View {
             Section("Diagnostics") {
                 Toggle("Debug logging", isOn: $debugLogging)
                 Button("Reset connection settings", role: .destructive) {
-                    serviceURL = "https://ghostgpt.live"; cloudflareEnabled = true; debugLogging = false
+                    serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"; cloudflareEnabled = true; debugLogging = false
                 }
             }
             Section("Safety") {
