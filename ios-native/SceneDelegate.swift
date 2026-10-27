@@ -10,6 +10,10 @@ struct ChatMessage: Identifiable, Codable {
 
 struct AIReply: Decodable { let reply: String }
 struct AIError: Decodable { let error: String }
+struct OllamaTags: Decodable { struct Model: Decodable { let name: String }; let models: [Model] }
+struct OpenAIModels: Decodable { struct Model: Decodable { let id: String }; let data: [Model] }
+struct OpenAIChatResponse: Decodable { struct Choice: Decodable { struct Message: Decodable { let content: String }; let message: Message }; let choices: [Choice] }
+struct OllamaChatResponse: Decodable { let message: Message; struct Message: Decodable { let content: String } }
 
 enum GhostTool: String, CaseIterable, Identifiable {
     case browser = "Browser"
@@ -59,6 +63,10 @@ struct GhostGPTRootView: View {
 struct ChatView: View {
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("speedMode") private var speedMode = "Balanced"
+    @AppStorage("modelProvider") private var modelProvider = "Cloudflare"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = ""
+    @AppStorage("localModelID") private var localModelID = "deepseek-r1:14b"
+    @AppStorage("localModelAPIKey") private var localModelAPIKey = ""
     @AppStorage("enabledToolsJSON") private var enabledToolsJSON = "[\"Browser\"]"
     @AppStorage("savedChatsJSON") private var savedChatsJSON = "[]"
     @State private var draft = ""
@@ -97,6 +105,11 @@ struct ChatView: View {
                         Text("Fast").tag("Fast")
                         Text("Balanced").tag("Balanced")
                         Text("Deep").tag("Deep")
+                    }
+                    Picker("AI model source", selection: $modelProvider) {
+                        Text("Cloud AI").tag("Cloudflare")
+                        Text("Ollama on PC").tag("Ollama")
+                        Text("LM Studio on PC").tag("LM Studio")
                     }
                     Divider()
                     ForEach(GhostTool.allCases) { tool in
@@ -436,6 +449,7 @@ struct PluginsView: View {
 struct TerminalGatewayView: View {
     let mode: String
     @AppStorage("terminalGatewayURL") private var gatewayURL = ""
+    @AppStorage("terminalGatewayToken") private var gatewayToken = ""
     @State private var host = ""
     @State private var username = ""
     @State private var command = ""
@@ -494,7 +508,8 @@ struct TerminalGatewayView: View {
             var request = URLRequest(url: base)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.timeoutInterval = 90
+            if !gatewayToken.isEmpty { request.setValue("Bearer \(gatewayToken)", forHTTPHeaderField: "Authorization") }
+            request.timeoutInterval = 30
             request.httpBody = try JSONSerialization.data(withJSONObject: [
                 "mode": mode, "host": host, "username": username, "command": submitted
             ])
@@ -514,12 +529,15 @@ struct TerminalGatewayView: View {
 
 struct TerminalGatewaySettingsView: View {
     @AppStorage("terminalGatewayURL") private var gatewayURL = ""
+    @AppStorage("terminalGatewayToken") private var gatewayToken = ""
     var body: some View {
         Form {
             Section("Secure terminal gateway") {
                 TextField("HTTPS gateway endpoint URL", text: $gatewayURL)
                     .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
-                Text("This must be a gateway you control that accepts POST JSON fields: mode, host, username, and command. It must authenticate requests and enforce host allow-lists. The app does not provide a shell server itself.")
+                SecureField("Gateway bearer token", text: $gatewayToken)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Text("Gateway must accept POST JSON fields mode, host, username, and command, authenticate the Bearer token, and enforce host/command allow-lists. The app does not provide a shell server itself.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Security") {
@@ -569,6 +587,7 @@ struct SettingsView: View {
             }
             Section("Tools") {
                 NavigationLink("Plugins & capabilities") { PluginsView() }
+                NavigationLink("AI models and local model scan") { LocalModelsSettingsView() }
                 NavigationLink("Terminal gateway (PowerShell / SSH)") { TerminalGatewaySettingsView() }
                 NavigationLink("Browser") { BrowserView() }
             }
