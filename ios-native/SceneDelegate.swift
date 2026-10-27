@@ -203,6 +203,15 @@ struct ChatView: View {
                             .frame(width: 42, height: 42)
                             .background(.white.opacity(0.09), in: Circle())
                     }.accessibilityLabel("Add tools and plugins")
+                    Menu {
+                        ForEach(["😀", "😂", "🔥", "❤️", "👍", "🤔", "🚀", "✨", "😎", "🎯"], id: \.self) { emoji in
+                            Button(emoji) { draft += emoji }
+                        }
+                    } label: {
+                        Image(systemName: "face.smiling")
+                            .font(.system(size: 18, weight: .medium))
+                            .frame(width: 34, height: 42)
+                    }.accessibilityLabel("Insert emoji")
                     TextField("Message GhostGPT", text: $draft, axis: .vertical)
                         .lineLimit(1...5).focused($composerFocused)
                         .padding(.horizontal, 14).padding(.vertical, 11)
