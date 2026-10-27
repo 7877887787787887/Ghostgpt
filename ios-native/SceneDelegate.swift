@@ -627,7 +627,7 @@ struct ToolsView: View {
             Section("Built-in tools") {
                 NavigationLink { BrowserView() } label: { Label("Ghost Browser", systemImage: "globe") }
                 NavigationLink { TerminalGatewayView(mode: "powershell") } label: { Label("PowerShell terminal", systemImage: "terminal") }
-                NavigationLink { TerminalGatewayView(mode: "ssh") } label: { Label("SSH terminal", systemImage: "server.rack") }
+                NavigationLink { TerminalGatewayView(mode: "ssh") } label: { Label("Linux sandbox / SSH", systemImage: "server.rack") }
                 NavigationLink { PluginsView() } label: { Label("Plugins & capabilities", systemImage: "puzzlepiece.extension") }
             }
             Section("Execution requirements") {
@@ -734,7 +734,7 @@ struct TerminalGatewayView: View {
                 .font(.caption2).foregroundStyle(.secondary)
         }.padding()
             .navigationTitle(mode == "ssh" ? "SSH" : "PowerShell")
-            .onAppear { if host.isEmpty { host = mode == "ssh" ? "raspberrypi" : "msi" } }
+            .onAppear { if host.isEmpty { host = mode == "ssh" ? "Ghost" : "msi" } }
             .sheet(isPresented: $showingSettings) {
                 NavigationStack { TerminalGatewaySettingsView().toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingSettings = false } } } }
             }
@@ -753,7 +753,7 @@ struct TerminalGatewayView: View {
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.timeoutInterval = speedMode == "Fast" ? 25 : 75
-            let shell = mode == "ssh" ? "POSIX shell" : "Windows PowerShell"
+            let shell = mode == "ssh" ? "Linux POSIX shell over SSH" : "Windows PowerShell"
             request.httpBody = try JSONSerialization.data(withJSONObject: [
                 "message": "Draft exactly one \(shell) command for this task: \(task). Return only the command, no Markdown fences or explanation. Prefer read-only inspection. Do not use destructive commands, change security settings, delete files, or expose credentials.",
                 "speed": speedMode.lowercased(),
@@ -1062,7 +1062,7 @@ struct SettingsView: View {
             Section("Tools") {
                 NavigationLink("Plugins & capabilities") { PluginsView() }
                 NavigationLink("AI models and local model scan") { LocalModelsSettingsView() }
-                NavigationLink("Terminal gateway (PowerShell / SSH)") { TerminalGatewaySettingsView() }
+                NavigationLink("Terminal gateway (PowerShell / Linux SSH)") { TerminalGatewaySettingsView() }
                 NavigationLink("MCP connectors") { MCPConnectorView() }
                 NavigationLink("Browser") { BrowserView() }
             }
