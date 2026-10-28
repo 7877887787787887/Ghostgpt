@@ -92,7 +92,8 @@ class GatewayAuthenticationTests(unittest.TestCase):
             "expires_at": gateway.time.time() + 60,
             "used": False,
         }), encoding="utf-8")
-        handler = FakeHandler(path="/pair", method="POST", body=__import__("json").dumps({"code": code}).encode())
+        pair_body = __import__("json").dumps({"code": code}).encode()
+        handler = FakeHandler(path="/pair", method="POST", headers={"Content-Length": str(len(pair_body))}, body=pair_body)
         with patch.object(gateway, "PAIR_STATE_FILE", state_file), patch.object(gateway, "PAIR_CODE_FILE", code_file), patch.object(gateway, "load_gateway_token", return_value="test-device-token"):
             gateway.Handler.do_POST(handler)
         self.assertEqual(handler.responses[0][0], 200)
@@ -100,7 +101,8 @@ class GatewayAuthenticationTests(unittest.TestCase):
         self.assertEqual(handler.responses[0][1]["endpoint"], "https://msi.tail28f016.ts.net:10000")
 
     def test_pair_endpoint_rejects_invalid_code_without_disclosing_token(self):
-        handler = FakeHandler(path="/pair", method="POST", body=b'{"code":"WRONG"}')
+        invalid_body = b'{"code":"WRONG"}'
+        handler = FakeHandler(path="/pair", method="POST", headers={"Content-Length": str(len(invalid_body))}, body=invalid_body)
         with patch.object(gateway, "load_gateway_token", return_value="must-not-leak"):
             gateway.Handler.do_POST(handler)
         self.assertEqual(handler.responses[0][0], 403)
