@@ -137,7 +137,7 @@ enum LocalModelClient {
         let apiKey = KeychainStore.migratedValue(for: selectedProvider.keychainAccount)
         if selectedProvider != .cloudflare && apiKey.isEmpty {
             throw NSError(domain: "GhostGPT.ModelProvider", code: 11, userInfo: [
-                NSLocalizedDescriptionKey: "The PC gateway bearer token is required for (selectedProvider.rawValue). Enter it in Settings → AI models."
+                NSLocalizedDescriptionKey: "The PC gateway bearer token is required for \(selectedProvider.rawValue). Enter it in Settings → AI models."
             ])
         }
         let selectedModelInput = model.trimmingCharacters(in: .whitespacesAndNewlines)
