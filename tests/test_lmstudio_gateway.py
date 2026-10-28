@@ -70,6 +70,42 @@ class GatewayAuthenticationTests(unittest.TestCase):
         self.addCleanup(self.env.stop)
         (TEST_HOME / "gateway.token").unlink(missing_ok=True)
 
+    def test_pairing_code_is_single_use_and_expires(self):
+        state_file = TEST_HOME / "pairing.state.json"
+        code_file = TEST_HOME / "pairing.code"
+        code = "AB12CD34"
+        state_file.write_text(__import__("json").dumps({
+            "code_hash": gateway.hashlib.sha256(code.encode()).hexdigest(),
+            "expires_at": gateway.time.time() + 60,
+            "used": False,
+        }), encoding="utf-8")
+        with patch.object(gateway, "PAIR_STATE_FILE", state_file), patch.object(gateway, "PAIR_CODE_FILE", code_file):
+            self.assertTrue(gateway.redeem_pairing_code(code, "192.0.2.10"))
+            self.assertFalse(gateway.redeem_pairing_code(code, "192.0.2.10"))
+
+    def test_pair_endpoint_returns_token_only_for_valid_single_use_code(self):
+        code = "AB12CD34"
+        state_file = TEST_HOME / "pairing-route.state.json"
+        code_file = TEST_HOME / "pairing-route.code"
+        state_file.write_text(__import__("json").dumps({
+            "code_hash": gateway.hashlib.sha256(code.encode()).hexdigest(),
+            "expires_at": gateway.time.time() + 60,
+            "used": False,
+        }), encoding="utf-8")
+        handler = FakeHandler(path="/pair", method="POST", body=__import__("json").dumps({"code": code}).encode())
+        with patch.object(gateway, "PAIR_STATE_FILE", state_file), patch.object(gateway, "PAIR_CODE_FILE", code_file), patch.object(gateway, "load_gateway_token", return_value="test-device-token"):
+            gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.responses[0][0], 200)
+        self.assertEqual(handler.responses[0][1]["token"], "test-device-token")
+        self.assertEqual(handler.responses[0][1]["endpoint"], "https://msi.tail28f016.ts.net:10000")
+
+    def test_pair_endpoint_rejects_invalid_code_without_disclosing_token(self):
+        handler = FakeHandler(path="/pair", method="POST", body=b'{"code":"WRONG"}')
+        with patch.object(gateway, "load_gateway_token", return_value="must-not-leak"):
+            gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.responses[0][0], 403)
+        self.assertNotIn("token", handler.responses[0][1])
+
     def test_missing_token_configuration_fails_closed(self):
         with patch.dict(os.environ, {
             "GHOSTGPT_GATEWAY_TOKEN": "",
