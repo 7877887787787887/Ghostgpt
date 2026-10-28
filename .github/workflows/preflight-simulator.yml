@@ -67,7 +67,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          DEVICE_ID="$(xcrun simctl list devices available | sed -nE 's/.*iPhone[^()]*\\(([0-9A-F-]{36})\\).*/\\1/p' | head -n 1)"
+          DEVICE_ID="$(xcrun simctl list devices available | sed -nE 's/.*iPhone[^()]*\(([0-9A-F-]{36})\).*/\1/p' | head -n 1)"
           if [[ -z "$DEVICE_ID" ]]; then
             echo "No available iPhone simulator runtime was found."
             xcrun simctl list devices available
