@@ -133,7 +133,7 @@ if __name__=="__main__":
     try: rec=json.loads(PAIR_FILE.read_text(encoding="utf-8"))
     except Exception: rec={}
     if not rec.get("code") or rec.get("used") or time.time()>float(rec.get("expires_at",0)):
-        rec={"code":secrets.token_hex(4).upper(),"created_at":time.time(),"expires_at":time.time()+1800,"used":False}
+        rec={"code":secrets.token_hex(6).upper(),"created_at":time.time(),"expires_at":time.time()+1800,"used":False}
         PAIR_FILE.write_text(json.dumps(rec),encoding="utf-8")
         logging.info("One-time pairing code generated in protected ProgramData directory")
     logging.info("Starting model-only listener on %s:%d; terminal paths are not implemented",HOST,PORT)
