@@ -2010,8 +2010,8 @@ struct AgentWorkspaceView: View {
             Recent execution results, newest last:
             \(recentLog.isEmpty ? "(No commands have been run yet.)" : recentLog)
             Remote host alias: \(remoteHost)
-            Propose exactly ONE next PowerShell command that safely advances the goal. Use observed output to inspect success or recover from failures. Prefer read-only diagnostics. Never use encoded/obfuscated commands, credential dumping, exfiltration, deletion, formatting, security disabling, or policy bypass. If a necessary action would modify the system, mark risk as "changes" and explain it. If the goal appears complete based on evidence, set complete to true and command to an empty string.
-            Return JSON only with keys: {"purpose":"short explanation","command":"one PowerShell command or empty string","risk":"read-only or changes","expectedResult":"observable outcome","complete":false}. Do not return a function call or Markdown fences.
+            Propose exactly ONE command for the selected shell (\(shellDescription)) that safely advances the goal. Use observed output to inspect success or recover from failures. Prefer read-only diagnostics. Never use encoded/obfuscated commands, credential dumping, exfiltration, deletion, formatting, security disabling, or policy bypass. If a necessary action would modify the system, mark risk as "changes" and explain it. If the goal appears complete based on evidence, set complete to true and command to an empty string.
+            Return JSON only with keys: {"purpose":"short explanation","command":"one command for the selected shell or empty string","risk":"read-only or changes","expectedResult":"observable outcome","complete":false}. Do not return a function call or Markdown fences.
             """
             let raw = try await LocalModelClient.chat(
                 endpoint: localModelEndpoint,
@@ -2060,7 +2060,7 @@ struct AgentWorkspaceView: View {
         }
         let token = KeychainStore.migratedValue(for: "terminalGatewayToken")
         guard !token.isEmpty else {
-            status = "Terminal gateway bearer token is missing. Configure it in Settings → Terminal gateway. No command was run."
+            status = "PowerShell gateway bearer token is missing for the terminal gateway. Configure the terminal gateway token in Settings → Terminal gateway. No command was run."
             runLog.insert(status, at: 0)
             runLog = Array(runLog.prefix(100))
             return
