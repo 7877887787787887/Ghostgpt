@@ -1533,10 +1533,10 @@ struct PCModelServerSettingsView: View {
         Form {
             Section("LM Studio on your PC") {
                 Label("PC-only model execution", systemImage: "desktopcomputer").font(.headline)
-                Text("Chat inference runs on your Windows PC in LM Studio. The iPhone only sends requests to this private Tailscale endpoint; it does not host a model.")
+                Text("Chat inference runs on your Windows PC in LM Studio. This public HTTPS endpoint is restricted to authenticated model requests; terminal commands remain on the private Tailscale gateway.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Toggle("Start automatically when GhostGPT opens", isOn: $autoStartPCModel)
-                TextField("Private HTTPS PC endpoint", text: $localModelEndpoint)
+                TextField("PC HTTPS model endpoint", text: $localModelEndpoint)
                     .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
                 SecureField("Gateway bearer token", text: $localModelAPIKey)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -1568,7 +1568,7 @@ struct PCModelServerSettingsView: View {
                 Text(status).font(.footnote).textSelection(.enabled)
             }
             Section("Startup behavior") {
-                Text("The PC has a Windows logon task to start LM Studio's local API and a separate local gateway. Opening GhostGPT checks the gateway and starts the API if it is stopped. The gateway listens only on the PC loopback interface and is published through the tailnet-only Tailscale endpoint.")
+                Text("The PC runs LM Studio locally. A separate public HTTPS gateway permits authenticated model requests only; the terminal gateway remains private to Tailscale. The pairing code is one-time and expires after 30 minutes.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
@@ -1622,7 +1622,7 @@ struct PCModelServerSettingsView: View {
 
     private func refreshStatus() async {
         guard let base = endpoint() else {
-            status = "Enter the private HTTPS Tailscale URL for the PC model server."
+            status = "Enter the HTTPS model endpoint for your PC."
             return
         }
         busy = true
@@ -1707,7 +1707,7 @@ struct LocalModelsSettingsView: View {
                 Picker("Provider", selection: $modelProvider) {
                     ForEach(ModelProvider.allCases) { item in Text(item.rawValue).tag(item.rawValue) }
                 }
-                TextField(provider == .cloudflare ? "Cloudflare Worker HTTPS URL" : "Private HTTPS Tailscale gateway URL", text: activeEndpoint)
+                TextField(provider == .cloudflare ? "Cloudflare Worker HTTPS URL" : "PC HTTPS model gateway URL", text: activeEndpoint)
                     .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
                 SecureField(provider == .cloudflare ? "Cloudflare bearer token (optional)" : "PC gateway bearer token", text: $providerAPIKey)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
