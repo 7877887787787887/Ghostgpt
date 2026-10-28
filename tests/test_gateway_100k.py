@@ -6,6 +6,11 @@ from test_lmstudio_gateway import FakeHandler, gateway
 
 
 class Gateway100KRegressionTests(unittest.TestCase):
+    def setUp(self):
+        self.token = patch.dict("os.environ", {"GHOSTGPT_GATEWAY_TOKEN": "stress-test-token"})
+        self.token.start()
+        self.addCleanup(self.token.stop)
+
     def test_100000_invalid_auth_requests_are_rejected_before_upstream(self):
         bad_headers = ["", "Basic invalid", "Bearer", "Bearer invalid-extra", "bearer wrong"]
         for i in range(100_000):
