@@ -228,6 +228,55 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_json(404, {"error": "Not found"})
 
+    def handle_ssh(self, payload):
+        """Run a tightly allow-listed, read-only command through Windows OpenSSH."""
+        if payload.get("approved") is not True:
+            self.send_json(403, {"error": "Explicit user approval is required before SSH command execution."})
+            return
+        configured_hosts = {item.strip().casefold() for item in os.environ.get("GHOSTGPT_SSH_HOSTS", "").split(",") if item.strip()}
+        host = str(payload.get("host", "")).strip()
+        if not host or host.casefold() not in configured_hosts:
+            self.send_json(403, {"error": "SSH target is not in GHOSTGPT_SSH_HOSTS. Configure exact trusted host aliases on the PC gateway."})
+            return
+        username = str(payload.get("username", "")).strip()
+        if username and (len(username) > 64 or not all(c.isalnum() or c in "._-" for c in username)):
+            self.send_json(400, {"error": "Invalid SSH username."})
+            return
+        command = str(payload.get("command", "")).strip()
+        if not command or len(command) > 4000:
+            self.send_json(400, {"error": "SSH command is empty or exceeds the 4000-character limit."})
+            return
+        if any(marker in command for marker in (";", "|", "\\n", "\\r", "&&", "||", "`", "<", ">", "$(", "${")):
+            self.send_json(403, {"error": "Compound commands, pipelines, substitutions, and redirection are blocked for SSH."})
+            return
+        try:
+            import shlex
+            parts = shlex.split(command, posix=True)
+        except ValueError:
+            self.send_json(400, {"error": "Could not parse SSH command arguments."})
+            return
+        allowed_roots = {"date", "df", "free", "hostname", "id", "ip", "ls", "nproc", "ps", "pwd", "ss", "uname", "uptime", "whoami"}
+        if not parts or parts[0].split("/")[-1] not in allowed_roots:
+            self.send_json(403, {"error": "SSH command is not on the read-only allow-list."})
+            return
+        ssh_executable = shutil.which("ssh.exe") or shutil.which("ssh")
+        if not ssh_executable:
+            self.send_json(503, {"error": "OpenSSH client is unavailable on the gateway PC. Install the Windows OpenSSH Client feature."})
+            return
+        target = f"{username}@{host}" if username else host
+        try:
+            result = subprocess.run([ssh_executable, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes", target, command], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=25, shell=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except subprocess.TimeoutExpired:
+            self.send_json(504, {"error": "SSH command exceeded the 25-second execution limit."})
+            return
+        except Exception:
+            logging.exception("Unable to launch SSH client")
+            self.send_json(503, {"error": "SSH client could not be started."})
+            return
+        stdout, stderr = result.stdout or "", result.stderr or ""
+        digest = hashlib.sha256(command.encode("utf-8")).hexdigest()[:16]
+        logging.info("SSH execution host=%s root=%s exit=%s command_sha256=%s", host, parts[0], result.returncode, digest)
+        self.send_json(200, {"ok": result.returncode == 0, "exit_code": result.returncode, "stdout": stdout[:MAX_TERMINAL_OUTPUT_CHARS], "stderr": stderr[:MAX_TERMINAL_OUTPUT_CHARS], "truncated": len(stdout) > MAX_TERMINAL_OUTPUT_CHARS or len(stderr) > MAX_TERMINAL_OUTPUT_CHARS, "risk": "read-only"})
     def read_json_body(self, limit):
         raw_length = self.headers.get("Content-Length", "0") or "0"
         try:
@@ -259,8 +308,12 @@ class Handler(BaseHTTPRequestHandler):
         payload = self.read_json_body(MAX_TERMINAL_BODY_BYTES)
         if payload is None:
             return
-        if str(payload.get("mode", "")).casefold() != "powershell":
-            self.send_json(501, {"error": "This gateway supports PowerShell only; configure a separate SSH gateway."})
+        mode = str(payload.get("mode", "powershell")).casefold()
+        if mode == "ssh":
+            self.handle_ssh(payload)
+            return
+        if mode != "powershell":
+            self.send_json(400, {"error": "Unsupported terminal mode. Use powershell or ssh."})
             return
         if payload.get("approved") is not True:
             self.send_json(403, {"error": "Explicit user approval is required before command execution."})
