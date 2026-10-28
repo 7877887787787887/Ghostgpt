@@ -33,6 +33,7 @@ jobs:
           set -euo pipefail
           test -s ios-native/AppDelegate.swift
           test -s ios-native/SceneDelegate.swift
+          test -s ios-native/verify-simulator-screen.swift
           grep -q 'enum LocalModelClient' ios-native/SceneDelegate.swift
           grep -q 'private func startPCModelOnAppOpen' ios-native/SceneDelegate.swift
           grep -q 'private func checkGatewayConnection' ios-native/SceneDelegate.swift
@@ -76,8 +77,10 @@ jobs:
           xcrun simctl bootstatus "$DEVICE_ID" -b
           xcrun simctl install "$DEVICE_ID" build/simulator/Build/Products/Debug-iphonesimulator/App.app
           xcrun simctl launch "$DEVICE_ID" io.corelo.ghostgpt
+          sleep 2
           xcrun simctl io "$DEVICE_ID" screenshot simulator-smoke.png
           test -s simulator-smoke.png
+          swift ios-native/verify-simulator-screen.swift simulator-smoke.png
         continue-on-error: false
 
       - name: Upload simulator screenshot
