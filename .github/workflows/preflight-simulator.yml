@@ -1,0 +1,90 @@
+name: GhostGPT preflight and simulator smoke tests
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ghostgpt-preflight-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Unit tests, simulator launch, IPA structure
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Python gateway unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -v
+
+      - name: Source and security guardrails
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ios-native/AppDelegate.swift
+          test -s ios-native/SceneDelegate.swift
+          grep -q 'enum LocalModelClient' ios-native/SceneDelegate.swift
+          grep -q 'private func startPCModelOnAppOpen' ios-native/SceneDelegate.swift
+          grep -q 'private func checkGatewayConnection' ios-native/SceneDelegate.swift
+          grep -q 'def authorize_request' windows/lmstudio_gateway.py
+          grep -q 'hmac.compare_digest' windows/lmstudio_gateway.py
+          grep -q 'StrictHostKeyChecking=yes' windows/lmstudio_gateway.py
+          ! grep -q '@AppStorage("terminalGatewayToken")' ios-native/SceneDelegate.swift
+          ! grep -q '@AppStorage("localModelAPIKey")' ios-native/SceneDelegate.swift
+
+      - name: Generate iOS project
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          npx cap add ios
+          npx cap sync ios
+          cp ios-native/AppDelegate.swift ios/App/App/AppDelegate.swift
+          cp ios-native/SceneDelegate.swift ios/App/App/SceneDelegate.swift
+          rm -rf ios/App/App/public
+          mkdir -p ios/App/App/public
+          test ! -e ios/App/App/public/index.html
+
+      - name: Build simulator app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/simulator IPHONEOS_DEPLOYMENT_TARGET=17.0 CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
+          test -d build/simulator/Build/Products/Debug-iphonesimulator/App.app
+
+      - name: Boot simulator and smoke-test app launch
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEVICE_ID="$(xcrun simctl list devices available | sed -nE 's/.*iPhone[^()]*\(([0-9A-F-]{36})\).*/\1/p' | head -n 1)"
+          if [[ -z "$DEVICE_ID" ]]; then
+            echo "No available iPhone simulator runtime was found."
+            xcrun simctl list devices available
+            exit 1
+          fi
+          xcrun simctl boot "$DEVICE_ID" 2>/dev/null || true
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          xcrun simctl install "$DEVICE_ID" build/simulator/Build/Products/Debug-iphonesimulator/App.app
+          xcrun simctl launch "$DEVICE_ID" com.ghostgpt.app
+          xcrun simctl io "$DEVICE_ID" screenshot simulator-smoke.png
+          test -s simulator-smoke.png
+        continue-on-error: false
+
+      - name: Upload simulator screenshot
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: GhostGPT-simulator-smoke
+          path: simulator-smoke.png
+          if-no-files-found: ignore
+          retention-days: 7
