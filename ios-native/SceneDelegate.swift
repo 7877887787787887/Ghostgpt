@@ -339,7 +339,7 @@ struct ChatView: View {
     @AppStorage("modelRequestTimeout") private var modelRequestTimeout = 90.0
     @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
-    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10001"
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @AppStorage("cloudflareModelID") private var cloudflareModelID = ""
     @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
@@ -982,7 +982,7 @@ struct PluginsView: View {
 struct TerminalGatewayView: View {
     let mode: String
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
-    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10001"
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @State private var host = ""
     @State private var username = ""
@@ -1519,10 +1519,13 @@ struct SettingsView: View {
 
 
 struct PCModelServerSettingsView: View {
-    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10001"
     @AppStorage("autoStartPCModel") private var autoStartPCModel = true
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @State private var localModelAPIKey = KeychainStore.migratedValue(for: "localModelAPIKey")
+    @State private var pairingCode = ""
+    @State private var pairingBusy = false
+    @State private var pairingStatus = "Not paired by this flow yet."
     @State private var busy = false
     @State private var status = "Checking the PC model server has not been run yet."
 
@@ -1537,8 +1540,17 @@ struct PCModelServerSettingsView: View {
                     .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
                 SecureField("Gateway bearer token", text: $localModelAPIKey)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
-                Text("Use the gateway token configured on the PC. It is stored in iOS Keychain.")
+                Text("Pair once to save a device access token in iOS Keychain. The public endpoint exposes model inference only; the terminal gateway stays private to Tailscale.")
                     .font(.footnote).foregroundStyle(.secondary)
+                SecureField("One-time PC pairing code", text: $pairingCode)
+                    .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                Button {
+                    Task { await pairWithPC() }
+                } label: {
+                    Label(pairingBusy ? "Pairing…" : "Pair this iPhone with PC", systemImage: "link")
+                }.disabled(pairingBusy || pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Text("Pairing status: \(pairingStatus)")
+                    .font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
                 Text("Default model: \(localModelID)")
                     .font(.footnote).foregroundStyle(.secondary)
             }
@@ -1563,6 +1575,43 @@ struct PCModelServerSettingsView: View {
         .navigationTitle("PC model server")
         .onAppear { Task { await refreshStatus() } }
         .onChange(of: localModelAPIKey) { _, value in _ = KeychainStore.save(value, for: "localModelAPIKey") }
+    }
+
+    private func pairWithPC() async {
+        let code = pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard let base = endpoint(), !code.isEmpty else {
+            pairingStatus = "Enter the PC HTTPS endpoint and one-time pairing code."
+            return
+        }
+        pairingBusy = true
+        defer { pairingBusy = false }
+        do {
+            var request = URLRequest(url: base.appendingPathComponent("pair"))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.timeoutInterval = 15
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["code": code])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard (200..<300).contains(http.statusCode),
+                  let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let token = result["token"] as? String, !token.isEmpty else {
+                let detail = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["error"] as? String ?? "Pairing request was rejected."
+                throw NSError(domain: "GhostGPT.Pairing", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: detail])
+            }
+            guard KeychainStore.save(token, for: "localModelAPIKey") else {
+                throw NSError(domain: "GhostGPT.Pairing", code: 1, userInfo: [NSLocalizedDescriptionKey: "iOS Keychain could not save the device token."])
+            }
+            localModelAPIKey = token
+            if let endpointText = result["endpoint"] as? String, let pairedURL = URL(string: endpointText), pairedURL.scheme == "https" {
+                localModelEndpoint = endpointText
+            }
+            pairingCode = ""
+            pairingStatus = "Paired successfully. Device token saved in iOS Keychain."
+            await refreshStatus()
+        } catch {
+            pairingStatus = "Pairing failed: \(error.localizedDescription)"
+        }
     }
 
     private func endpoint() -> URL? {
@@ -1632,7 +1681,7 @@ struct PCModelServerSettingsView: View {
 struct LocalModelsSettingsView: View {
     @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
-    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10001"
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @AppStorage("cloudflareModelID") private var cloudflareModelID = ""
     @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
@@ -1808,7 +1857,7 @@ struct LocalModelsSettingsView: View {
 }
 struct AgentWorkspaceView: View {
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
-    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10001"
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @AppStorage("agentExecutionMode") private var executionMode = "powershell"
     @State private var goal = ""
