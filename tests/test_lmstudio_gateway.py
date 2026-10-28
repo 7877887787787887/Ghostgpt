@@ -278,8 +278,8 @@ class GatewayAuthenticationTests(unittest.TestCase):
             "command": "whoami", "approved": True
         })
         fake_result = type("Result", (), {"returncode": 0, "stdout": "tester\\n", "stderr": ""})()
-        with patch.dict(os.environ, {"GHOSTGPT_SSH_HOSTS": "ghost"}), \\
-             patch.object(gateway.shutil, "which", return_value="ssh.exe"), \\
+        with patch.dict(os.environ, {"GHOSTGPT_SSH_HOSTS": "ghost"}), \
+             patch.object(gateway.shutil, "which", return_value="ssh.exe"), \
              patch.object(gateway.subprocess, "run", return_value=fake_result) as run:
             gateway.Handler.do_POST(handler)
         self.assertEqual(handler.responses[0][0], 200)
@@ -292,15 +292,15 @@ class GatewayAuthenticationTests(unittest.TestCase):
         handler = self._terminal_handler({
             "mode": "ssh", "host": "untrusted", "command": "whoami", "approved": True
         })
-        with patch.dict(os.environ, {"GHOSTGPT_SSH_HOSTS": "ghost"}), \\
+        with patch.dict(os.environ, {"GHOSTGPT_SSH_HOSTS": "ghost"}), \
              patch.object(gateway.subprocess, "run", side_effect=AssertionError("must not run")):
             gateway.Handler.do_POST(handler)
         self.assertEqual(handler.responses[0][0], 403)
         handler = self._terminal_handler({
             "mode": "ssh", "host": "ghost", "command": "whoami; uname -a", "approved": True
         })
-        with patch.dict(os.environ, {"GHOSTGPT_SSH_HOSTS": "ghost"}), \\
-             patch.object(gateway.shutil, "which", return_value="ssh.exe"), \\
+        with patch.dict(os.environ, {"GHOSTGPT_SSH_HOSTS": "ghost"}), \
+             patch.object(gateway.shutil, "which", return_value="ssh.exe"), \
              patch.object(gateway.subprocess, "run", side_effect=AssertionError("must not run")):
             gateway.Handler.do_POST(handler)
         self.assertEqual(handler.responses[0][0], 403)
