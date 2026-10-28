@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   preflight:
-    name: Unit tests, simulator launch, IPA structure
+    name: Unit tests and simulator launch
     runs-on: xcode-27
     timeout-minutes: 25
     steps:
@@ -75,7 +75,7 @@ jobs:
           xcrun simctl boot "$DEVICE_ID" 2>/dev/null || true
           xcrun simctl bootstatus "$DEVICE_ID" -b
           xcrun simctl install "$DEVICE_ID" build/simulator/Build/Products/Debug-iphonesimulator/App.app
-          xcrun simctl launch "$DEVICE_ID" com.ghostgpt.app
+          xcrun simctl launch "$DEVICE_ID" io.corelo.ghostgpt
           xcrun simctl io "$DEVICE_ID" screenshot simulator-smoke.png
           test -s simulator-smoke.png
         continue-on-error: false
