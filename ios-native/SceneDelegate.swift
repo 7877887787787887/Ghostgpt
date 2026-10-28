@@ -1617,6 +1617,10 @@ struct LocalModelsSettingsView: View {
     @State private var availableModels: [String] = []
     @State private var status = "Model inventory has not been checked."
     @State private var loading = false
+    @AppStorage("responseSpeedMode") private var responseSpeedMode = "Balanced"
+    @AppStorage("reasoningLevel") private var reasoningLevel = 1.0
+    @AppStorage("maxResponseTokens") private var maxResponseTokens = 512.0
+    @AppStorage("modelRequestTimeout") private var modelRequestTimeout = 90.0
 
     private var provider: ModelProvider { ModelProvider(rawValue: modelProvider) ?? .lmStudio }
     private var activeEndpoint: Binding<String> {
@@ -1645,6 +1649,36 @@ struct LocalModelsSettingsView: View {
                         ForEach(availableModels, id: \.self) { model in Text(model).tag(model) }
                     }
                 }
+            }
+            Section("Response tuning") {
+                Picker("Response speed", selection: $responseSpeedMode) {
+                    Text("Fast").tag("Fast")
+                    Text("Balanced").tag("Balanced")
+                    Text("Quality").tag("Quality")
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Reasoning level")
+                        Spacer()
+                        Text(["Off", "Low", "Medium", "High"][min(3, max(0, Int(reasoningLevel.rounded())))])
+                            .foregroundStyle(.secondary)
+                    }
+                    Slider(value: $reasoningLevel, in: 0...3, step: 1)
+                    Text("Higher levels request more deliberation where the selected model supports it; the app cannot force unsupported model reasoning features.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack { Text("Maximum response length"); Spacer(); Text("\(Int(maxResponseTokens)) tokens").foregroundStyle(.secondary) }
+                    Slider(value: $maxResponseTokens, in: 128...8192, step: 128)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack { Text("Request timeout"); Spacer(); Text("\(Int(modelRequestTimeout)) sec").foregroundStyle(.secondary) }
+                    Slider(value: $modelRequestTimeout, in: 15...180, step: 15)
+                }
+            }
+            Section("TLS connection diagnostics") {
+                Text("If startup reports a TLS error, verify that the gateway hostname exactly matches its certificate, the certificate is current, the complete certificate chain is served, and the issuing CA is trusted by iOS. Do not disable certificate validation. A browser or iOS TLS error may hide the exact certificate failure; inspect the gateway certificate and logs on the PC.")
+                    .font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
             }
             Section("Provider behavior") {
                 switch provider {
