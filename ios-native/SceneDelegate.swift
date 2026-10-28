@@ -125,7 +125,9 @@ enum LocalModelClient {
         model: String,
         messages: [[String: String]],
         maxTokens: Int,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        responseSpeed: String? = nil,
+        reasoningLevel: Int = 1
     ) async throws -> String {
         let selectedProvider = ModelProvider(
             rawValue: providerName ?? UserDefaults.standard.string(forKey: "modelProvider") ?? ModelProvider.lmStudio.rawValue
@@ -155,7 +157,9 @@ enum LocalModelClient {
             request.timeoutInterval = timeout
             var payload: [String: Any] = [
                 "message": userMessage, "messages": messages,
-                "speed": UserDefaults.standard.string(forKey: "speedMode")?.lowercased() ?? "balanced",
+                "speed": (responseSpeed ?? UserDefaults.standard.string(forKey: "responseSpeedMode") ?? UserDefaults.standard.string(forKey: "speedMode") ?? "Balanced").lowercased(),
+                "max_tokens": maxTokens,
+                "reasoning_level": max(0, min(3, reasoningLevel)),
                 "tools": []
             ]
             if !selectedModelInput.isEmpty { payload["model"] = selectedModelInput }
@@ -208,7 +212,7 @@ enum LocalModelClient {
             request.timeoutInterval = timeout
             request.httpBody = try JSONSerialization.data(withJSONObject: [
                 "model": selectedModel, "stream": false, "think": false, "messages": messages,
-                "options": ["num_predict": maxTokens, "num_ctx": 4096]
+                "options": ["num_predict": maxTokens, "num_ctx": 4096, "think": reasoningLevel >= 2]
             ])
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
@@ -263,9 +267,11 @@ enum LocalModelClient {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             addBearer(apiKey, to: &request)
             request.timeoutInterval = timeout
-            request.httpBody = try JSONSerialization.data(withJSONObject: [
-                "model": selectedModel, "stream": false, "messages": messages, "max_tokens": maxTokens
-            ])
+            var chatPayload: [String: Any] = [
+                "model": selectedModel, "stream": false, "messages": messages, "max_tokens": maxTokens,
+                "reasoning_effort": reasoningLevel >= 3 ? "high" : (reasoningLevel == 2 ? "medium" : "low")
+            ]
+            request.httpBody = try JSONSerialization.data(withJSONObject: chatPayload)
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
             guard (200..<300).contains(http.statusCode) else {
@@ -327,6 +333,10 @@ struct GhostGPTRootView: View {
 
 struct ChatView: View {
     @AppStorage("speedMode") private var speedMode = "Balanced"
+    @AppStorage("responseSpeedMode") private var responseSpeedMode = "Balanced"
+    @AppStorage("reasoningLevel") private var reasoningLevel = 1.0
+    @AppStorage("maxResponseTokens") private var maxResponseTokens = 512.0
+    @AppStorage("modelRequestTimeout") private var modelRequestTimeout = 90.0
     @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
@@ -702,13 +712,18 @@ struct ChatView: View {
     }
 
     private func sendToLocalModel(history: [[String: String]]) async throws {
+        let selectedSpeed = responseSpeedMode
+        let speedTimeout = selectedSpeed == "Fast" ? min(modelRequestTimeout, 45) : modelRequestTimeout
+        let tokenLimit = max(128, min(8192, Int(maxResponseTokens)))
         let reply = try await LocalModelClient.chat(
             provider: modelProvider,
             endpoint: localModelEndpoint,
             model: localModelID,
             messages: history,
-            maxTokens: speedMode == "Fast" ? 128 : 512,
-            timeout: speedMode == "Fast" ? 45 : 180
+            maxTokens: tokenLimit,
+            timeout: speedTimeout,
+            responseSpeed: selectedSpeed,
+            reasoningLevel: Int(reasoningLevel)
         )
         messages.append(ChatMessage(text: reply, isUser: false))
     }
@@ -1786,6 +1801,7 @@ struct AgentWorkspaceView: View {
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
     @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
+    @AppStorage("agentExecutionMode") private var executionMode = "powershell"
     @State private var goal = ""
     @State private var plan = ""
     @State private var status = "Ready"
@@ -1834,16 +1850,20 @@ struct AgentWorkspaceView: View {
                 } label: {
                     Label(busy ? "Planning…" : "Plan task", systemImage: "sparkles")
                 }.disabled(busy || preparingStep || executingStep || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Picker("Execution target", selection: $executionMode) {
+                    Text("PowerShell (Windows)").tag("powershell")
+                    Text("SSH (remote Linux/Unix)").tag("ssh")
+                }
                 Button {
                     Task { await prepareNextStep() }
                 } label: {
-                    Label(preparingStep ? "Preparing next action…" : "Prepare next PowerShell action", systemImage: "arrow.trianglehead.2.clockwise")
+                    Label(preparingStep ? "Preparing next action…" : "Prepare next \(executionMode == "ssh" ? "SSH" : "PowerShell") action", systemImage: "arrow.trianglehead.2.clockwise")
                 }.disabled(busy || preparingStep || executingStep || agentComplete || goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Text("GhostGPT can propose one command at a time through your configured PowerShell gateway. It never runs a proposal automatically.")
+                Text("GhostGPT proposes one command at a time for the selected target. It never runs a proposal automatically.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Remote target") {
-                TextField("Windows host or session name", text: $remoteHost)
+                TextField(executionMode == "ssh" ? "SSH host or alias" : "Windows host or session name", text: $remoteHost)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 TextField("Username (if required by gateway)", text: $remoteUsername)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -1902,7 +1922,7 @@ struct AgentWorkspaceView: View {
             }
             Section("Available execution tool") {
                 Label("Configured PowerShell HTTPS gateway", systemImage: "terminal")
-                Text("This agent stage executes only through the configured gateway. MCP, browser, and SSH tools are not invoked by this loop yet.")
+                Text("This agent stage executes through the configured authenticated terminal gateway. Select SSH for remote Unix commands or PowerShell for Windows. Browser research is available in the Ghost Browser tab; the agent does not silently claim it browsed a page.")
                     .font(.footnote).foregroundStyle(.secondary)
                 NavigationLink("Configure PowerShell gateway") { TerminalGatewaySettingsView() }
             }
@@ -1973,8 +1993,9 @@ struct AgentWorkspaceView: View {
         defer { preparingStep = false }
         do {
             let recentLog = runLog.prefix(12).reversed().joined(separator: "\n\n")
+            let shellDescription = executionMode == "ssh" ? "remote Linux/Unix POSIX shell over SSH" : "Windows PowerShell"
             let instruction = """
-            You are GhostGPT's bounded PowerShell agent. Goal: \(cleanGoal)
+            You are GhostGPT's bounded command agent for \(shellDescription). Goal: \(cleanGoal)
             Current plan:
             \(plan)
             Recent execution results, newest last:
