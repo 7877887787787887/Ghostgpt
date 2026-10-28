@@ -12,17 +12,17 @@ class GatewayStressTests(unittest.TestCase):
         self.token.start()
         self.addCleanup(self.token.stop)
 
-    def test_500_invalid_authorization_headers_are_rejected(self):
+    def test_50000_invalid_authorization_headers_are_rejected(self):
         bad_headers = ["", "Basic stress-test-token", "Bearer", "Bearer stress-test-token-extra", "bearer definitely-wrong"]
-        for i in range(500):
+        for i in range(50000):
             with self.subTest(iteration=i):
                 handler = FakeHandler(path="/control/status", headers={"Authorization": bad_headers[i % len(bad_headers)]})
                 with patch.object(gateway, "get_models", side_effect=AssertionError("unauthorized request reached upstream")):
                     gateway.Handler.do_GET(handler)
                 self.assertEqual(handler.responses[0][0], 401)
 
-    def test_250_unapproved_terminal_requests_never_execute(self):
-        for i in range(250):
+    def test_25000_unapproved_terminal_requests_never_execute(self):
+        for i in range(25000):
             payload = {"mode": "powershell" if i % 2 == 0 else "ssh",
                        "host": "msi" if i % 3 else "localhost",
                        "command": "Get-Process", "approved": False}
