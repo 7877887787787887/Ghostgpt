@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Private loopback gateway for GhostGPT -> LM Studio on this Windows PC."""
 from __future__ import annotations
-import getpass, hashlib, hmac, http.client, json, logging, os, shutil, subprocess, threading, time
+import getpass, hashlib, hmac, http.client, json, logging, os, secrets, shutil, subprocess, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -19,6 +19,10 @@ start_lock = threading.Lock()
 MAX_BODY_BYTES = 8 * 1024 * 1024
 MAX_TERMINAL_BODY_BYTES = 64 * 1024
 MAX_TERMINAL_OUTPUT_CHARS = 16 * 1024
+PAIR_CODE_FILE = LOG_DIR / "pairing.code"
+PAIR_STATE_FILE = LOG_DIR / "pairing.state.json"
+pair_lock = threading.Lock()
+pair_attempts = {}
 IS_WINDOWS = os.name == "nt"
 
 READ_ONLY_COMMANDS = {
@@ -77,6 +81,48 @@ def load_gateway_token():
         return token_path.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+
+def create_pairing_code():
+    """Create a single-use, 30-minute pairing code stored locally beside gateway state."""
+    try:
+        state = json.loads(PAIR_STATE_FILE.read_text(encoding="utf-8"))
+        if not state.get("used") and time.time() < float(state.get("expires_at", 0)):
+            return
+    except Exception:
+        pass
+    code = secrets.token_hex(4).upper()
+    state = {"code_hash": hashlib.sha256(code.encode("utf-8")).hexdigest(),
+             "expires_at": time.time() + 1800, "used": False}
+    PAIR_STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
+    PAIR_CODE_FILE.write_text(code + chr(10), encoding="utf-8")
+    logging.info("One-time pairing code stored at %s; code value is not logged.", PAIR_CODE_FILE)
+
+def redeem_pairing_code(code, client_ip):
+    now = time.monotonic()
+    with pair_lock:
+        recent = [t for t in pair_attempts.get(client_ip, []) if now - t < 600]
+        pair_attempts[client_ip] = recent
+        if len(recent) >= 8:
+            return False
+        recent.append(now)
+        try:
+            state = json.loads(PAIR_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        if state.get("used") or time.time() > float(state.get("expires_at", 0)):
+            return False
+        expected = str(state.get("code_hash", ""))
+        supplied = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        if not expected or not hmac.compare_digest(supplied, expected):
+            return False
+        state["used"] = True
+        state["code_hash"] = ""
+        PAIR_STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
+        try:
+            PAIR_CODE_FILE.unlink(missing_ok=True)
+        except OSError:
+            logging.warning("Could not remove redeemed pairing code file.")
+        return True
 
 def get_models(timeout=5.0):
     req = Request(f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}/v1/models",
@@ -205,9 +251,30 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_json(404, {"error": "Not found"})
     def do_POST(self):
+        path = urlsplit(self.path).path
+        if path == "/pair":
+            try:
+                raw_length = int(self.headers.get("Content-Length", "0") or "0")
+                if raw_length < 0 or raw_length > 4096:
+                    self.send_json(400, {"error": "Invalid pairing request"})
+                    return
+                payload = json.loads(self.rfile.read(raw_length).decode("utf-8")) if raw_length else {}
+                code = str(payload.get("code", "")).strip().upper()
+            except Exception:
+                self.send_json(400, {"error": "Invalid pairing request"})
+                return
+            if not code or len(code) > 32 or not redeem_pairing_code(code, self.client_address[0]):
+                self.send_json(403, {"error": "Pairing code is invalid, expired, already used, or rate-limited"})
+                return
+            token = load_gateway_token()
+            if not token:
+                self.send_json(503, {"error": "Gateway authentication is not configured"})
+                return
+            self.send_json(200, {"ok": True, "token": token, "endpoint": "https://msi.tail28f016.ts.net:10000"})
+            logging.info("One-time device pairing completed from %s", self.client_address[0])
+            return
         if not self.authorize_request():
             return
-        path = urlsplit(self.path).path
         if path == "/control/start":
             try:
                 models = ensure_lmstudio()
@@ -485,6 +552,7 @@ class Handler(BaseHTTPRequestHandler):
                 conn.close()
 
 if __name__ == "__main__":
+    create_pairing_code()
     if load_gateway_token():
         logging.info("Gateway bearer token is configured; no secret value will be logged.")
     else:
