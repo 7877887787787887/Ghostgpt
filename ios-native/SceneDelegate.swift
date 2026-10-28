@@ -2046,12 +2046,12 @@ struct AgentWorkspaceView: View {
         let submitted = proposedCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !submitted.isEmpty, !remoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard let url = URL(string: gatewayURL.trimmingCharacters(in: .whitespacesAndNewlines)), url.scheme == "https", url.host != nil else {
-            status = "Configure a valid HTTPS PowerShell gateway in Settings. No command was run."
+            status = "Configure a valid HTTPS terminal gateway in Settings. No command was run."
             return
         }
         let token = KeychainStore.migratedValue(for: "terminalGatewayToken")
         guard !token.isEmpty else {
-            status = "PowerShell gateway bearer token is missing. Configure it in Settings → Terminal gateway. No command was run."
+            status = "Terminal gateway bearer token is missing. Configure it in Settings → Terminal gateway. No command was run."
             runLog.insert(status, at: 0)
             runLog = Array(runLog.prefix(100))
             return
@@ -2065,7 +2065,7 @@ struct AgentWorkspaceView: View {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             request.timeoutInterval = 65
             request.httpBody = try JSONSerialization.data(withJSONObject: [
-                "mode": "powershell",
+                "mode": executionMode,
                 "host": remoteHost,
                 "username": remoteUsername,
                 "command": submitted,
@@ -2085,7 +2085,7 @@ struct AgentWorkspaceView: View {
             runLog = Array(runLog.prefix(100))
             if success { stepIndex += 1 }
             proposedCommand = ""
-            status = success ? "Step succeeded. Inspecting output and preparing the next proposal…" : "Step failed (HTTP \(http.statusCode), command result \(commandOK ? "ok" : "failed"), exit code \(exitCodeText)). Inspecting the error and preparing a recovery proposal…"
+            status = success ? "Step succeeded. Inspecting output and preparing the next \(executionMode == "ssh" ? "SSH" : "PowerShell") proposal…" : "Step failed (HTTP \(http.statusCode), command result \(commandOK ? "ok" : "failed"), exit code \(exitCodeText)). Inspecting the error and preparing a recovery proposal…"
             await prepareNextStep()
         } catch {
             runLog.insert("Step \(stepIndex + 1) could not reach the gateway: \(error.localizedDescription)", at: 0)
