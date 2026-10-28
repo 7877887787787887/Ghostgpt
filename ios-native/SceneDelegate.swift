@@ -259,7 +259,7 @@ enum LocalModelClient {
             }
             let selectedModel: String
             if modelIDs.contains(selectedModelInput) { selectedModel = selectedModelInput }
-            else if modelIDs.contains("openai/gpt-oss-20b") { selectedModel = "openai/gpt-oss-20b" }
+            else if modelIDs.contains("meta-llama-3.1-8b-instruct") { selectedModel = "meta-llama-3.1-8b-instruct" }
             else { selectedModel = modelIDs[0] }
             if selectedModel != selectedModelInput { updateSelectedModel(selectedModel, provider: .lmStudio) }
             var request = URLRequest(url: base.appendingPathComponent("v1/chat/completions"))
@@ -340,10 +340,10 @@ struct ChatView: View {
     @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
-    @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
+    @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @AppStorage("cloudflareModelID") private var cloudflareModelID = ""
     @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
-    @AppStorage("lmStudioModelID") private var lmStudioModelID = "openai/gpt-oss-20b"
+    @AppStorage("lmStudioModelID") private var lmStudioModelID = "meta-llama-3.1-8b-instruct"
     @AppStorage("autoStartPCModel") private var autoStartPCModel = true
     @AppStorage("enabledToolsJSON") private var enabledToolsJSON = "[\"Browser\"]"
     @AppStorage("savedChatsJSON") private var savedChatsJSON = "[]"
@@ -716,7 +716,7 @@ struct ChatView: View {
             throw NSError(domain: "GhostGPT.PCModel", code: 3, userInfo: [NSLocalizedDescriptionKey: "LM Studio is running on the PC but advertises no models. Download or enable a model in LM Studio, then retry."])
         }
         if !modelIDs.contains(localModelID) {
-            localModelID = modelIDs.contains("openai/gpt-oss-20b") ? "openai/gpt-oss-20b" : (modelIDs.sorted().first ?? modelIDs[0])
+            localModelID = modelIDs.contains("meta-llama-3.1-8b-instruct") ? "meta-llama-3.1-8b-instruct" : (modelIDs.sorted().first ?? modelIDs[0])
         }
     }
 
@@ -983,7 +983,7 @@ struct TerminalGatewayView: View {
     let mode: String
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
-    @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
+    @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @State private var host = ""
     @State private var username = ""
     @State private var command = ""
@@ -1521,7 +1521,7 @@ struct SettingsView: View {
 struct PCModelServerSettingsView: View {
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
     @AppStorage("autoStartPCModel") private var autoStartPCModel = true
-    @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
+    @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @State private var localModelAPIKey = KeychainStore.migratedValue(for: "localModelAPIKey")
     @State private var busy = false
     @State private var status = "Checking the PC model server has not been run yet."
@@ -1620,7 +1620,7 @@ struct PCModelServerSettingsView: View {
             }
             let modelIDs = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["models"] as? [String] ?? []
             if !modelIDs.isEmpty && !modelIDs.contains(localModelID) {
-                localModelID = modelIDs.contains("openai/gpt-oss-20b") ? "openai/gpt-oss-20b" : (modelIDs.sorted().first ?? modelIDs[0])
+                localModelID = modelIDs.contains("meta-llama-3.1-8b-instruct") ? "meta-llama-3.1-8b-instruct" : (modelIDs.sorted().first ?? modelIDs[0])
             }
             status = "Started / verified LM Studio on the PC. Found \(modelIDs.count) model ID(s). Active selection: \(localModelID)."
         } catch {
@@ -1633,10 +1633,10 @@ struct LocalModelsSettingsView: View {
     @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
-    @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
+    @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @AppStorage("cloudflareModelID") private var cloudflareModelID = ""
     @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
-    @AppStorage("lmStudioModelID") private var lmStudioModelID = "openai/gpt-oss-20b"
+    @AppStorage("lmStudioModelID") private var lmStudioModelID = "meta-llama-3.1-8b-instruct"
     @State private var providerAPIKey = ""
     @State private var availableModels: [String] = []
     @State private var status = "Model inventory has not been checked."
@@ -1797,7 +1797,7 @@ struct LocalModelsSettingsView: View {
                 throw NSError(domain: "GhostGPT.ModelScan", code: 10, userInfo: [NSLocalizedDescriptionKey: "\(provider.rawValue) is reachable but reports no models."])
             }
             if !availableModels.contains(localModelID) {
-                localModelID = availableModels.contains("openai/gpt-oss-20b") ? "openai/gpt-oss-20b" : availableModels[0]
+                localModelID = availableModels.contains("meta-llama-3.1-8b-instruct") ? "meta-llama-3.1-8b-instruct" : availableModels[0]
             }
             status = "Found \(availableModels.count) model(s) for \(provider.rawValue)."
         } catch {
@@ -1809,7 +1809,7 @@ struct LocalModelsSettingsView: View {
 struct AgentWorkspaceView: View {
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10000"
-    @AppStorage("localModelID") private var localModelID = "openai/gpt-oss-20b"
+    @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @AppStorage("agentExecutionMode") private var executionMode = "powershell"
     @State private var goal = ""
     @State private var plan = ""
