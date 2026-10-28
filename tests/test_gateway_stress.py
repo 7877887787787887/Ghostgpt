@@ -46,7 +46,7 @@ class GatewayStressTests(unittest.TestCase):
             "Get-Process\nRemove-Item temp",
             "Get-Process; Stop-Service example",
         ]
-        for i in range(250):
+        for i in range(25000):
             with self.subTest(iteration=i):
                 self.assertTrue(gateway.command_is_risky(commands[i % len(commands)]))
 
