@@ -328,6 +328,12 @@ struct GhostGPTRootView: View {
         }
         .tint(Color(red: 0.36, green: 0.56, blue: 1.0))
         .preferredColorScheme(.dark)
+        .onAppear {
+            let defaults = UserDefaults.standard
+            if defaults.string(forKey: "localModelEndpoint") == "https://msi.tail28f016.ts.net:10000" {
+                defaults.set("https://msi.tail28f016.ts.net:10001", forKey: "localModelEndpoint")
+            }
+        }
     }
 }
 
