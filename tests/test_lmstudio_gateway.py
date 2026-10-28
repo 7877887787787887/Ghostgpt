@@ -38,6 +38,8 @@ class FakeHandler:
 
     def handle_terminal(self):
         return gateway.Handler.handle_terminal(self)
+    def handle_ssh(self, payload):
+        return gateway.Handler.handle_ssh(self, payload)
 
     def proxy_to_lmstudio(self):
         return gateway.Handler.proxy_to_lmstudio(self)
@@ -270,13 +272,38 @@ class GatewayAuthenticationTests(unittest.TestCase):
             gateway.Handler.do_POST(handler)
         self.assertEqual(handler.responses[0][0], 403)
 
-    def test_terminal_gateway_explicitly_rejects_ssh_mode(self):
+    def test_terminal_gateway_supports_allowlisted_read_only_ssh(self):
         handler = self._terminal_handler({
-            "mode": "ssh", "host": "Ghost", "command": "whoami", "approved": True
+            "mode": "ssh", "host": "ghost", "username": "tester",
+            "command": "whoami", "approved": True
         })
-        with patch.object(gateway.subprocess, "run", side_effect=AssertionError("SSH must not execute here")):
+        fake_result = type("Result", (), {"returncode": 0, "stdout": "tester\\n", "stderr": ""})()
+        with patch.dict(os.environ, {"GHOSTGPT_SSH_HOSTS": "ghost"}), \\
+             patch.object(gateway.shutil, "which", return_value="ssh.exe"), \\
+             patch.object(gateway.subprocess, "run", return_value=fake_result) as run:
             gateway.Handler.do_POST(handler)
-        self.assertEqual(handler.responses[0][0], 501)
+        self.assertEqual(handler.responses[0][0], 200)
+        self.assertTrue(handler.responses[0][1]["ok"])
+        self.assertEqual(handler.responses[0][1]["stdout"], "tester\\n")
+        self.assertIn("StrictHostKeyChecking=yes", run.call_args.args[0])
+        self.assertEqual(run.call_args.kwargs["shell"], False)
+
+    def test_ssh_rejects_unconfigured_host_and_compound_commands(self):
+        handler = self._terminal_handler({
+            "mode": "ssh", "host": "untrusted", "command": "whoami", "approved": True
+        })
+        with patch.dict(os.environ, {"GHOSTGPT_SSH_HOSTS": "ghost"}), \\
+             patch.object(gateway.subprocess, "run", side_effect=AssertionError("must not run")):
+            gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.responses[0][0], 403)
+        handler = self._terminal_handler({
+            "mode": "ssh", "host": "ghost", "command": "whoami; uname -a", "approved": True
+        })
+        with patch.dict(os.environ, {"GHOSTGPT_SSH_HOSTS": "ghost"}), \\
+             patch.object(gateway.shutil, "which", return_value="ssh.exe"), \\
+             patch.object(gateway.subprocess, "run", side_effect=AssertionError("must not run")):
+            gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.responses[0][0], 403)
 
     def test_ollama_model_routes_require_auth_and_do_not_forward_bearer(self):
         unauthenticated = FakeHandler(path="/api/tags")
