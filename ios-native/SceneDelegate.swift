@@ -381,10 +381,10 @@ struct ChatView: View {
                 }
                 Spacer()
                 Menu {
-                    Picker("Response speed", selection: $speedMode) {
+                    Picker("Response speed", selection: $responseSpeedMode) {
                         Text("Fast").tag("Fast")
                         Text("Balanced").tag("Balanced")
-                        Text("Deep").tag("Deep")
+                        Text("Quality").tag("Quality")
                     }
                     Picker("AI provider", selection: $modelProvider) {
                         ForEach(ModelProvider.allCases) { provider in
@@ -400,7 +400,7 @@ struct ChatView: View {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "bolt.fill").foregroundStyle(.yellow)
-                        Text(speedMode).font(.caption.weight(.semibold))
+                        Text(responseSpeedMode).font(.caption.weight(.semibold))
                         Image(systemName: "chevron.down").font(.caption2)
                     }.padding(.horizontal, 10).padding(.vertical, 9)
                         .background(.white.opacity(0.07), in: Capsule())
@@ -513,7 +513,7 @@ struct ChatView: View {
                 }
                 HStack(spacing: 5) {
                     Image(systemName: "bolt.fill").foregroundStyle(.yellow)
-                    Text("\(speedMode) mode")
+                    Text("\(responseSpeedMode) mode")
                     Text("·")
                     Text(enabledTools.isEmpty ? "No tools selected" : "\(enabledTools.count) tool(s) enabled")
                     Spacer()
@@ -582,8 +582,8 @@ struct ChatView: View {
                     }.buttonStyle(.plain)
                 }
                 Menu {
-                    Picker("Speed", selection: $speedMode) {
-                        Text("Fast").tag("Fast"); Text("Balanced").tag("Balanced"); Text("Deep").tag("Deep")
+                    Picker("Speed", selection: $responseSpeedMode) {
+                        Text("Fast").tag("Fast"); Text("Balanced").tag("Balanced"); Text("Quality").tag("Quality")
                     }
                 } label: {
                     Label("Speed", systemImage: "speedometer").font(.caption.weight(.medium))
