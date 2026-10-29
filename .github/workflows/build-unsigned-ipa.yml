@@ -3,6 +3,8 @@ name: Build native unsigned iOS IPA
 on:
   push:
     branches: [main, "feature/**"]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
