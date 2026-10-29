@@ -77,6 +77,7 @@ jobs:
           DEVICE_LIST="$(timeout 30s xcrun simctl list devices available)" || { echo "xcrun simctl list devices failed or timed out" >&2; exit 124; }
           printf "%s\n" "$DEVICE_LIST"
           DEVICE_ID="$(printf "%s\n" "$DEVICE_LIST" | sed -nE 's/.*iPhone[^()]*\(([0-9A-F-]{36})\).*/\1/p' | head -n 1)"
+          if [[ -z "$DEVICE_ID" ]]; then
             echo "No available iPhone simulator runtime was found."
             xcrun simctl list devices available
             exit 1
