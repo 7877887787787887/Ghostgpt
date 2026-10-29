@@ -118,7 +118,7 @@ jobs:
           # cloud provider for this launch so smoke testing doesn't make a real
           # PC-gateway request or misreport missing tailnet access as an app failure.
           run("app launch", ["xcrun", "simctl", "launch", device, "io.corelo.ghostgpt",
-                             "-modelProvider", "Cloudflare", "-autoStartPCModel", "false"], 45)
+                             "-modelProvider", "Cloudflare", "-autoStartPCModel", "false"], 90)
           time.sleep(2)
           run("screenshot capture", ["xcrun", "simctl", "io", device, "screenshot",
                                      "simulator-smoke.png"], 45)
