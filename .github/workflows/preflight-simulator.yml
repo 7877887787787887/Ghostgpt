@@ -2,6 +2,8 @@ name: GhostGPT preflight and simulator smoke tests
 
 on:
   push:
+    branches: [main, "feature/**"]
+  pull_request:
     branches: [main]
   workflow_dispatch:
 
@@ -9,8 +11,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ghostgpt-preflight-${{ github.ref }}
-  cancel-in-progress: false
+  group: ghostgpt-preflight-v2-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   preflight:
@@ -37,6 +39,10 @@ jobs:
           grep -q 'enum LocalModelClient' ios-native/SceneDelegate.swift
           grep -q 'private func startPCModelOnAppOpen' ios-native/SceneDelegate.swift
           grep -q 'private func checkGatewayConnection' ios-native/SceneDelegate.swift
+          grep -q 'private func runOllamaAgent' ios-native/SceneDelegate.swift
+          grep -q 'aiTerminalToolsEnabled' ios-native/SceneDelegate.swift
+          grep -q 'riskConfirmed' ios-native/SceneDelegate.swift
+          grep -q 'tool_calls' ios-native/SceneDelegate.swift
           grep -q 'def authorize_request' windows/lmstudio_gateway.py
           grep -q 'hmac.compare_digest' windows/lmstudio_gateway.py
           grep -q 'StrictHostKeyChecking=yes' windows/lmstudio_gateway.py

@@ -23,7 +23,20 @@ The public model-only endpoint does not require the iPhone to be on the Tailscal
 
 ## Browser and tool behavior
 
-The browser tab is an in-app web view. The selected model can draft plans and commands but does not execute tools by itself. Terminal execution requires a separate configured gateway and explicit user action.
+The browser tab is an in-app web view. The chat model must not claim to have read a page unless actual page content is supplied. The MCP connector remains available under Settings → MCP connectors.
+
+## AI PowerShell and SSH tool calls
+
+The native chat can use Ollama's tool-call API to execute real, sequential terminal diagnostics and feed the actual gateway output back into the model. This is enabled only when **Ollama** is selected, the **AI terminal tool calls (Ollama)** setting is on, the corresponding PowerShell/SSH toggle is enabled, and the private terminal gateway token is present in iOS Keychain.
+
+- Configure **Settings → Terminal gateway (PowerShell / Linux SSH)** with the private HTTPS endpoint and bearer token.
+- In **Settings → AI models**, select Ollama. The Ollama endpoint is derived from the private terminal gateway root; it uses the terminal gateway token rather than the public LM Studio model token.
+- In the chat provider menu, enable AI terminal tool calls and the desired PowerShell and/or SSH tool.
+- The model can execute one read-only command at a time, up to five tool steps per response. Actual command results are shown in the chat and returned to the model.
+- The Windows gateway remains authoritative. PowerShell is restricted to its read-only allow-list and SSH to exact aliases in `GHOSTGPT_SSH_HOSTS`; compound commands, pipelines, redirection, encoded commands, and credential-oriented operations are blocked. The current startup script configures the trusted Pi host `192.168.7.139` with the Windows OpenSSH client configuration.
+- Modifying commands are not automatically executed by the chat tool loop. Use the interactive Agent Workspace / terminal UI for reviewed actions, and only enable gateway-side modification support when you intentionally need it. Do not expose the raw terminal or model APIs publicly.
+
+Cloudflare and LM Studio remain supported for ordinary chat; this native tool-call loop currently requires Ollama.
 
 ## Build an unsigned IPA
 
