@@ -74,7 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "Listing available iPhone simulators (30-second limit)..."
-          DEVICE_LIST="$(timeout 30s xcrun simctl list devices available)" || { echo "xcrun simctl list devices failed or timed out" >&2; exit 124; }
+          DEVICE_LIST="$(python3 -c 'import subprocess; print(subprocess.run(["xcrun", "simctl", "list", "devices", "available"], capture_output=True, text=True, timeout=30, check=True).stdout, end="")')" || { echo "xcrun simctl list devices failed or timed out" >&2; exit 124; }
           printf "%s\n" "$DEVICE_LIST"
           DEVICE_ID="$(printf "%s\n" "$DEVICE_LIST" | sed -nE 's/.*iPhone[^()]*\(([0-9A-F-]{36})\).*/\1/p' | head -n 1)"
           if [[ -z "$DEVICE_ID" ]]; then
