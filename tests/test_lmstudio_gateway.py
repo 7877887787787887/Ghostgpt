@@ -465,6 +465,11 @@ class GatewayAuthenticationTests(unittest.TestCase):
         self.assertIn('components.scheme?.lowercased() == "https"', source)
         self.assertIn('Provider changed. Scan the new provider', source)
 
+    def test_public_model_endpoint_uses_default_https_port_and_migrates_saved_values(self):
+        source = (ROOT / "ios-native" / "SceneDelegate.swift").read_text(encoding="utf-8")
+        self.assertIn('savedEndpoint == "https://msi.tail28f016.ts.net:8443/model"', source)
+        self.assertIn('defaults.set("https://msi.tail28f016.ts.net/model", forKey: "localModelEndpoint")', source)
+        self.assertIn('@AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net/model"', source)
     def test_agent_uses_actual_command_result_and_requires_gateway_token(self):
         source = (ROOT / "ios-native" / "SceneDelegate.swift").read_text(encoding="utf-8")
         self.assertIn('let commandOK = resultObject?["ok"] as? Bool == true', source)
@@ -482,7 +487,7 @@ class PublicModelPairingTests(unittest.TestCase):
         with patch.object(public_gateway, "redeem", return_value=True), patch.object(public_gateway, "token", return_value="test-device-token"):
             public_gateway.Handler.do_POST(handler)
         self.assertEqual(handler.responses[0][0], 200)
-        self.assertEqual(handler.responses[0][1]["endpoint"], "https://msi.tail28f016.ts.net:8443/model")
+        self.assertEqual(handler.responses[0][1]["endpoint"], "https://msi.tail28f016.ts.net/model")
 
     def test_public_model_gateway_rejects_unauthenticated_inventory(self):
         handler = FakeHandler(path="/v1/models", method="GET", headers={})

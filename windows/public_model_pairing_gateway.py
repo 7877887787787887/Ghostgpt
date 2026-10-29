@@ -85,7 +85,7 @@ class Handler(BaseHTTPRequestHandler):
             secret=token()
             if not secret: self.send_json(503,{"error":"Pairing is not configured"}); return
             logging.info("One-time model pairing redeemed; token value not logged")
-            self.send_json(200,{"ok":True,"token":secret,"endpoint":"https://msi.tail28f016.ts.net:8443/model"}); return
+            self.send_json(200,{"ok":True,"token":secret,"endpoint":"https://msi.tail28f016.ts.net/model"}); return
         if not self.authorized(): self.send_json(401,{"error":"Unauthorized"}); return
         if path=="/control/start":
             try:
