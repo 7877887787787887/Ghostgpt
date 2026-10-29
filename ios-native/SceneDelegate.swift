@@ -663,7 +663,7 @@ struct ChatView: View {
         isConnecting = true
         showingTools = false
         Task {
-            defer { isConnecting = false }
+            defer { isConnecting = false; agentStatus = "Ready" }
             do {
                 // Bound request size so long conversations do not overwhelm the phone or model gateway.
                 let conversation = messages.suffix(24).map {
@@ -853,6 +853,7 @@ struct ChatView: View {
             ]
             let evidenceData = try JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys, .fragmentsAllowed])
             let evidenceText = String(data: evidenceData, encoding: .utf8) ?? "Command result could not be serialized."
+            messages.append(ChatMessage(text: "Tool result — \(mode) on \(host)\n$ \(command)\n\(evidenceText)", isUser: false))
             working.append(["role": "assistant", "content": message["content"] as? String ?? "", "tool_calls": calls])
             working.append(["role": "tool", "tool_name": name, "content": evidenceText])
         }
