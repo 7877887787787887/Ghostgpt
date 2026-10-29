@@ -2,7 +2,7 @@ name: Build native unsigned iOS IPA
 
 on:
   push:
-    branches: [main]
+    branches: [main, "feature/**"]
   workflow_dispatch:
 
 permissions:
@@ -32,6 +32,9 @@ jobs:
           ! grep -q 'Open GhostGPT' ios-native/AppDelegate.swift ios-native/SceneDelegate.swift
           grep -q 'enum LocalModelClient' ios-native/SceneDelegate.swift
           grep -q 'LocalModelClient.chat' ios-native/SceneDelegate.swift
+          grep -q 'private func runOllamaAgent' ios-native/SceneDelegate.swift
+          grep -q 'aiTerminalToolsEnabled' ios-native/SceneDelegate.swift
+          grep -q 'riskConfirmed' ios-native/SceneDelegate.swift
           grep -q 'enum ModelProvider' ios-native/SceneDelegate.swift
           grep -q 'case cloudflare = "Cloudflare"' ios-native/SceneDelegate.swift
           grep -q 'case ollama = "Ollama"' ios-native/SceneDelegate.swift
