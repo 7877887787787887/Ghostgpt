@@ -138,9 +138,25 @@ enum LocalModelClient {
         let selectedProvider = ModelProvider(
             rawValue: providerName ?? UserDefaults.standard.string(forKey: "modelProvider") ?? ModelProvider.lmStudio.rawValue
         ) ?? .lmStudio
-        let configuredEndpoint = selectedProvider == .cloudflare
-            ? (UserDefaults.standard.string(forKey: "serviceURL") ?? defaultCloudflareEndpoint)
-            : endpoint
+        let configuredEndpoint: String
+        switch selectedProvider {
+        case .cloudflare:
+            configuredEndpoint = UserDefaults.standard.string(forKey: "serviceURL") ?? defaultCloudflareEndpoint
+        case .ollama:
+            let terminalEndpoint = UserDefaults.standard.string(forKey: "terminalGatewayURL") ?? "https://msi.tail28f016.ts.net:10000/terminal"
+            if var components = URLComponents(string: terminalEndpoint),
+               components.scheme?.lowercased() == "https", components.host != nil,
+               components.user == nil, components.password == nil {
+                components.path = ""
+                components.query = nil
+                components.fragment = nil
+                configuredEndpoint = components.url?.absoluteString ?? ""
+            } else {
+                configuredEndpoint = ""
+            }
+        case .lmStudio:
+            configuredEndpoint = endpoint
+        }
         let base = try validatedBaseURL(configuredEndpoint, provider: selectedProvider)
         let apiKey = KeychainStore.migratedValue(for: selectedProvider.keychainAccount)
         if selectedProvider != .cloudflare && apiKey.isEmpty {
@@ -2107,8 +2123,8 @@ struct AgentWorkspaceView: View {
     @AppStorage("agentPendingPurpose") private var proposalPurpose = ""
     @AppStorage("agentPendingRisk") private var proposalRisk = "read-only"
     @AppStorage("agentPendingExpectedResult") private var expectedResult = ""
-    @AppStorage("agentRemoteHost") private var remoteHost = "msi"
-    @AppStorage("agentRemoteUsername") private var remoteUsername = ""
+    @AppStorage("agentRemoteHost") private var remoteHost = "192.168.7.139"
+    @AppStorage("agentRemoteUsername") private var remoteUsername = "pi"
     @AppStorage("agentStepIndex") private var stepIndex = 0
     @AppStorage("agentComplete") private var agentComplete = false
     @State private var runLog: [String] = []
