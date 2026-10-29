@@ -347,6 +347,7 @@ struct ChatView: View {
     @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net/model"
+    @AppStorage("terminalGatewayURL") private var terminalGatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @AppStorage("cloudflareModelID") private var cloudflareModelID = ""
     @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
@@ -672,9 +673,9 @@ struct ChatView: View {
                 let appContext = """
                 You are GhostGPT running inside a native iOS app. The selected model/provider is \(modelProvider), and response mode is \(responseSpeedMode). Configured in-app capabilities: \(enabled).
                 Browser: the app includes a built-in Ghost Browser for opening websites and searching. Do not claim you opened, read, or verified a page unless page content or results are actually supplied in this conversation.
-                SSH: the app includes an SSH terminal and an agent mode that can draft remote Unix/Linux shell commands. Remote execution requires a configured HTTPS terminal gateway, a valid bearer token, a reachable SSH target, and explicit user approval in the agent UI. Never claim a command ran unless its actual gateway output is supplied.
-                PowerShell: a separate Windows terminal route exists and also requires explicit approval. Prefer read-only diagnostics first, explain commands, and never request secrets to be pasted into chat.
-                Tool availability is not the same as tool execution. If the browser, SSH gateway, or provider is not actually available to this request, say so and give the next configuration step.
+                SSH: the app includes an SSH terminal and can call the configured SSH gateway for read-only diagnostics only when AI SSH tools are enabled. The gateway must have the exact trusted host alias configured. Never claim a command ran unless its actual gateway output is supplied.
+                PowerShell: the app can call its authenticated Windows gateway for read-only diagnostics only when AI PowerShell tools are enabled. The gateway enforces a strict allow-list; modifications require the interactive Agent Workspace and explicit gateway opt-in.
+                Tool availability is not the same as tool execution. If the browser, SSH gateway, provider, or terminal token is unavailable, say so. Never request secrets in chat or invent execution results.
                 """
                 let history = [["role": "system", "content": appContext]] + conversation
                 if modelProvider == ModelProvider.ollama.rawValue && aiTerminalToolsEnabled &&
@@ -817,8 +818,10 @@ struct ChatView: View {
             terminalRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             terminalRequest.timeoutInterval = 65
             let isSSH = mode == "ssh"
-            let host = isSSH ? (((arguments["host"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? (arguments["host"] as? String ?? agentRemoteHost) : agentRemoteHost) : "localhost"
-            let username = isSSH ? (((arguments["username"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? (arguments["username"] as? String ?? agentRemoteUsername) : agentRemoteUsername) : ""
+            let requestedHost = (arguments["host"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let requestedUsername = (arguments["username"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let host = isSSH ? (requestedHost.isEmpty ? agentRemoteHost : requestedHost) : "localhost"
+            let username = isSSH ? (requestedUsername.isEmpty ? agentRemoteUsername : requestedUsername) : ""
             let terminalPayload: [String: Any] = [
                 "mode": mode,
                 "host": host,
