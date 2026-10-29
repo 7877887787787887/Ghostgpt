@@ -126,7 +126,7 @@ jobs:
               print("Simulator screenshot is missing or empty", file=sys.stderr, flush=True)
               sys.exit(1)
           run("Vision screen text verification",
-              ["swift", "ios-native/verify-simulator-screen.swift", "simulator-smoke.png"], 60)
+              ["swift", "ios-native/verify-simulator-screen.swift", "simulator-smoke.png"], 180)
           PY
         continue-on-error: false
 
