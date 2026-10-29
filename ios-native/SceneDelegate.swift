@@ -330,8 +330,9 @@ struct GhostGPTRootView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             let defaults = UserDefaults.standard
-            if defaults.string(forKey: "localModelEndpoint") == "https://msi.tail28f016.ts.net:10000" {
-                defaults.set("https://msi.tail28f016.ts.net:10001", forKey: "localModelEndpoint")
+            let savedEndpoint = defaults.string(forKey: "localModelEndpoint")
+            if savedEndpoint == "https://msi.tail28f016.ts.net:10000" || savedEndpoint == "https://msi.tail28f016.ts.net:10001" {
+                defaults.set("https://msi.tail28f016.ts.net:8443/model", forKey: "localModelEndpoint")
             }
         }
     }
@@ -345,7 +346,7 @@ struct ChatView: View {
     @AppStorage("modelRequestTimeout") private var modelRequestTimeout = 90.0
     @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
-    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10001"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:8443/model"
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @AppStorage("cloudflareModelID") private var cloudflareModelID = ""
     @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
@@ -988,7 +989,7 @@ struct PluginsView: View {
 struct TerminalGatewayView: View {
     let mode: String
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
-    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10001"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:8443/model"
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @State private var host = ""
     @State private var username = ""
@@ -1525,7 +1526,7 @@ struct SettingsView: View {
 
 
 struct PCModelServerSettingsView: View {
-    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10001"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:8443/model"
     @AppStorage("autoStartPCModel") private var autoStartPCModel = true
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @State private var localModelAPIKey = KeychainStore.migratedValue(for: "localModelAPIKey")
@@ -1687,7 +1688,7 @@ struct PCModelServerSettingsView: View {
 struct LocalModelsSettingsView: View {
     @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
-    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10001"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:8443/model"
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @AppStorage("cloudflareModelID") private var cloudflareModelID = ""
     @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
@@ -1863,7 +1864,7 @@ struct LocalModelsSettingsView: View {
 }
 struct AgentWorkspaceView: View {
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
-    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10001"
+    @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:8443/model"
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @AppStorage("agentExecutionMode") private var executionMode = "powershell"
     @State private var goal = ""

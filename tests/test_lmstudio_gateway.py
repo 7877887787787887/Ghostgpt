@@ -15,6 +15,10 @@ spec = importlib.util.spec_from_file_location("lmstudio_gateway", ROOT / "window
 gateway = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gateway)
 
+public_spec = importlib.util.spec_from_file_location("public_model_pairing_gateway", ROOT / "windows" / "public_model_pairing_gateway.py")
+public_gateway = importlib.util.module_from_spec(public_spec)
+public_spec.loader.exec_module(public_gateway)
+
 
 class FakeHandler:
     def __init__(self, path="/", headers=None, method="GET", body=b""):
@@ -29,6 +33,9 @@ class FakeHandler:
 
     def send_json(self, status, data):
         self.responses.append((status, data))
+
+    def authorized(self):
+        return public_gateway.Handler.authorized(self)
 
     def authorize_request(self):
         return gateway.Handler.authorize_request(self)
@@ -465,6 +472,22 @@ class GatewayAuthenticationTests(unittest.TestCase):
         self.assertIn('let success = httpSuccess && commandOK && (exitCode == nil || exitCode == 0)', source)
         self.assertIn("PowerShell gateway bearer token is missing", source)
         self.assertIn("await prepareNextStep()", source)
+
+
+class PublicModelPairingTests(unittest.TestCase):
+    def test_pair_endpoint_returns_supported_funnel_path(self):
+        code = "AB12CD34"
+        body = __import__("json").dumps({"code": code}).encode()
+        handler = FakeHandler(path="/pair", headers={"Content-Length": str(len(body))}, method="POST", body=body)
+        with patch.object(public_gateway, "redeem", return_value=True), patch.object(public_gateway, "token", return_value="test-device-token"):
+            public_gateway.Handler.do_POST(handler)
+        self.assertEqual(handler.responses[0][0], 200)
+        self.assertEqual(handler.responses[0][1]["endpoint"], "https://msi.tail28f016.ts.net:8443/model")
+
+    def test_public_model_gateway_rejects_unauthenticated_inventory(self):
+        handler = FakeHandler(path="/v1/models", method="GET", headers={})
+        public_gateway.Handler.do_GET(handler)
+        self.assertEqual(handler.responses[0][0], 401)
 
 if __name__ == "__main__":
     unittest.main()
