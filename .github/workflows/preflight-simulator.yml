@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ghostgpt-preflight-v3-${{ github.ref }}
+  group: ghostgpt-preflight-v4-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
