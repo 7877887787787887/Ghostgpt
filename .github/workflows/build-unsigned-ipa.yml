@@ -3,8 +3,16 @@ name: Build native unsigned iOS IPA
 on:
   push:
     branches: [main, "feature/**"]
+    paths-ignore:
+      - ".github/workflows/**"
+      - "README.md"
+      - "tests/**"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - ".github/workflows/**"
+      - "README.md"
+      - "tests/**"
   workflow_dispatch:
 
 permissions:
