@@ -83,7 +83,13 @@ enum ModelProvider: String, CaseIterable, Identifiable {
     case ollama = "Ollama"
     case lmStudio = "LM Studio"
     var id: String { rawValue }
-    var keychainAccount: String { self == .cloudflare ? "cloudflareAPIKey" : "localModelAPIKey" }
+    var keychainAccount: String {
+        switch self {
+        case .cloudflare: return "cloudflareAPIKey"
+        case .ollama: return "terminalGatewayToken"
+        case .lmStudio: return "localModelAPIKey"
+        }
+    }
 }
 
 enum LocalModelClient {
@@ -357,8 +363,8 @@ struct ChatView: View {
     @AppStorage("aiTerminalToolsEnabled") private var aiTerminalToolsEnabled = true
     @AppStorage("aiPowerShellToolsEnabled") private var aiPowerShellToolsEnabled = true
     @AppStorage("aiSSHToolsEnabled") private var aiSSHToolsEnabled = true
-    @AppStorage("agentRemoteHost") private var agentRemoteHost = "msi"
-    @AppStorage("agentRemoteUsername") private var agentRemoteUsername = ""
+    @AppStorage("agentRemoteHost") private var agentRemoteHost = "192.168.7.139"
+    @AppStorage("agentRemoteUsername") private var agentRemoteUsername = "pi"
     @AppStorage("savedChatsJSON") private var savedChatsJSON = "[]"
     @State private var draft = ""
     @State private var messages: [ChatMessage] = []
@@ -380,6 +386,16 @@ struct ChatView: View {
 
     private var enabledTools: [String] {
         (try? JSONDecoder().decode([String].self, from: Data(enabledToolsJSON.utf8))) ?? ["Browser"]
+    }
+
+    private var ollamaGatewayEndpoint: String {
+        guard var components = URLComponents(string: terminalGatewayURL),
+              components.scheme?.lowercased() == "https", components.host != nil,
+              components.user == nil, components.password == nil else { return "" }
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.url?.absoluteString ?? ""
     }
 
     var body: some View {
@@ -919,7 +935,7 @@ struct ChatView: View {
         let tokenLimit = max(128, min(8192, Int(maxResponseTokens)))
         let reply = try await LocalModelClient.chat(
             provider: modelProvider,
-            endpoint: localModelEndpoint,
+            endpoint: modelProvider == ModelProvider.ollama.rawValue ? ollamaGatewayEndpoint : localModelEndpoint,
             model: localModelID,
             messages: history,
             maxTokens: tokenLimit,
@@ -1680,8 +1696,8 @@ struct SettingsView: View {
         List {
             Section("GhostGPT") {
                 Label("Native SwiftUI interface", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                Label("LM Studio on PC", systemImage: "desktopcomputer").foregroundStyle(.blue)
-                Text("Main chat runs through the LM Studio-compatible API on your PC only. No cloud chat fallback is used.")
+                Label("PC models and optional Cloudflare provider", systemImage: "desktopcomputer").foregroundStyle(.blue)
+                Text("Choose Ollama or LM Studio for your authenticated private PC gateway, or Cloudflare for the configured Worker. Providers do not silently fall back to one another.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Preferences") {
@@ -1875,6 +1891,7 @@ struct LocalModelsSettingsView: View {
     @AppStorage("modelProvider") private var modelProvider = "LM Studio"
     @AppStorage("serviceURL") private var serviceURL = "https://ghostgpt-ai.conman31115.workers.dev"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net/model"
+    @AppStorage("terminalGatewayURL") private var terminalGatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
     @AppStorage("cloudflareModelID") private var cloudflareModelID = ""
     @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
@@ -1889,9 +1906,31 @@ struct LocalModelsSettingsView: View {
     @AppStorage("modelRequestTimeout") private var modelRequestTimeout = 90.0
 
     private var provider: ModelProvider { ModelProvider(rawValue: modelProvider) ?? .lmStudio }
+    private var ollamaGatewayEndpoint: String {
+        guard var components = URLComponents(string: terminalGatewayURL),
+              components.scheme?.lowercased() == "https", components.host != nil,
+              components.user == nil, components.password == nil else { return "" }
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.url?.absoluteString ?? ""
+    }
     private var activeEndpoint: Binding<String> {
-        Binding(get: { provider == .cloudflare ? serviceURL : localModelEndpoint },
-                set: { value in if provider == .cloudflare { serviceURL = value } else { localModelEndpoint = value } })
+        Binding(get: {
+            switch provider {
+            case .cloudflare: return serviceURL
+            case .ollama: return ollamaGatewayEndpoint
+            case .lmStudio: return localModelEndpoint
+            }
+        }, set: { value in
+            switch provider {
+            case .cloudflare: serviceURL = value
+            case .ollama:
+                let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                terminalGatewayURL = cleaned.hasSuffix("/terminal") ? cleaned : cleaned + "/terminal"
+            case .lmStudio: localModelEndpoint = value
+            }
+        })
     }
 
     var body: some View {
@@ -1900,9 +1939,9 @@ struct LocalModelsSettingsView: View {
                 Picker("Provider", selection: $modelProvider) {
                     ForEach(ModelProvider.allCases) { item in Text(item.rawValue).tag(item.rawValue) }
                 }
-                TextField(provider == .cloudflare ? "Cloudflare Worker HTTPS URL" : "PC HTTPS model gateway URL", text: activeEndpoint)
+                TextField(provider == .cloudflare ? "Cloudflare Worker HTTPS URL" : (provider == .ollama ? "Private PC Ollama HTTPS gateway URL" : "Public PC LM Studio model URL"), text: activeEndpoint)
                     .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
-                SecureField(provider == .cloudflare ? "Cloudflare bearer token (optional)" : "PC gateway bearer token", text: $providerAPIKey)
+                SecureField(provider == .cloudflare ? "Cloudflare bearer token (optional)" : (provider == .ollama ? "Private terminal gateway bearer token" : "Public model gateway bearer token"), text: $providerAPIKey)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 TextField("Active model ID (optional for Cloudflare)", text: $localModelID)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
