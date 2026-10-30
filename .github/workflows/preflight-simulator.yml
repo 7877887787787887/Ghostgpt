@@ -82,7 +82,15 @@ jobs:
           from pathlib import Path
 
           def output(args, timeout=60):
-              return subprocess.run(args, check=True, capture_output=True, text=True, timeout=timeout).stdout
+              result = subprocess.run(args, check=False, capture_output=True, text=True, timeout=timeout)
+              if result.returncode:
+                  print(f"Command failed ({result.returncode}): {' '.join(args)}", file=sys.stderr, flush=True)
+                  if result.stdout:
+                      print(result.stdout, file=sys.stderr, flush=True)
+                  if result.stderr:
+                      print(result.stderr, file=sys.stderr, flush=True)
+                  raise SystemExit(result.returncode)
+              return result.stdout
 
           runtimes = json.loads(output(["xcrun", "simctl", "list", "runtimes", "--json"]))["runtimes"]
           ios = [r for r in runtimes if r.get("isAvailable") and r.get("identifier", "").startswith("com.apple.CoreSimulator.SimRuntime.iOS-27-")]
@@ -102,7 +110,20 @@ jobs:
           for label, type_id in required:
               if type_id not in available_types:
                   raise SystemExit(f"Required simulator device type is unavailable: {label} ({type_id})")
-              udid = output(["xcrun", "simctl", "create", f"GhostGPT {label} iOS 27", type_id, runtime_id]).strip()
+              # Retry transient CoreSimulator service failures, and preserve
+              # stderr so a real unsupported-device/runtime mismatch is visible.
+              udid = ""
+              for attempt in range(3):
+                  try:
+                      udid = output(["xcrun", "simctl", "create", f"GhostGPT {label} iOS 27", type_id, runtime_id], timeout=90).strip()
+                      break
+                  except SystemExit:
+                      if attempt == 2:
+                          raise
+                      print(f"Retrying simulator creation for {label} (attempt {attempt + 2}/3)", flush=True)
+                      time.sleep(10)
+              if not udid:
+                  raise SystemExit(f"Simulator creation returned no device identifier for {label}")
               devices.append((label, udid))
 
           def run(label, args, timeout):
