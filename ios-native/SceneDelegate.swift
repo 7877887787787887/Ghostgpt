@@ -485,6 +485,7 @@ struct ChatView: View {
                                         .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
                                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.07), lineWidth: 1))
                                 }.buttonStyle(.plain)
+                                    .accessibilityIdentifier("ghost.quick-prompt.\(item.0)")
                             }
                         }
                         HStack(spacing: 8) {
@@ -549,6 +550,7 @@ struct ChatView: View {
                             .frame(width: 34, height: 42)
                     }.accessibilityLabel("Insert emoji")
                     TextField("Message GhostGPT", text: $draft, axis: .vertical)
+                        .accessibilityIdentifier("ghost.chat.composer")
                         .lineLimit(1...5).focused($composerFocused)
                         .padding(.horizontal, 14).padding(.vertical, 11)
                         .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22))
@@ -560,6 +562,8 @@ struct ChatView: View {
                             .frame(width: 42, height: 42)
                             .background(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isConnecting ? Color.gray.opacity(0.5) : Color.white, in: Circle())
                     }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isConnecting)
+                        .accessibilityLabel("Send message")
+                        .accessibilityIdentifier("ghost.chat.send")
                 }
                 HStack(spacing: 5) {
                     Image(systemName: "bolt.fill").foregroundStyle(.yellow)
@@ -1467,6 +1471,7 @@ struct TerminalGatewayView: View {
                     Label(checkingGateway ? "Checking connection…" : "Test gateway connection", systemImage: "network")
                 }.buttonStyle(.bordered).disabled(checkingGateway)
                 Text(gatewayStatus).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("ghost.terminal.status")
                 Text("The authenticated HEAD check reports whether PowerShell is available. It never runs a command.")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
