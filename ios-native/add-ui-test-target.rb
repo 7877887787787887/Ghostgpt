@@ -8,6 +8,8 @@ app = project.targets.find { |target| target.name == 'App' }
 abort 'Missing generated App target' unless app
 abort 'UI test target already exists' if project.targets.any? { |target| target.name == 'GhostGPTUITests' }
 
+app.build_configurations.each { |config| config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '17.0' }
+
 FileUtils.mkdir_p('ios/App/GhostGPTUITests')
 FileUtils.cp('ios-native/GhostGPTUITests.swift', 'ios/App/GhostGPTUITests/GhostGPTUITests.swift')
 target = project.new_target(:ui_test_bundle, 'GhostGPTUITests', :ios, '17.0')
@@ -18,6 +20,7 @@ target.source_build_phase.add_file_reference(group.new_file('GhostGPTUITests.swi
 target.build_configurations.each do |config|
   config.build_settings.merge!({
     'PRODUCT_NAME' => '$(TARGET_NAME)',
+    'IPHONEOS_DEPLOYMENT_TARGET' => '17.0',
     'PRODUCT_BUNDLE_IDENTIFIER' => 'io.corelo.ghostgpt.uitests',
     'GENERATE_INFOPLIST_FILE' => 'YES',
     'SWIFT_VERSION' => '5.0',

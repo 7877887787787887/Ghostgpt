@@ -94,7 +94,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          xcodebuild -project ios/App/App.xcodeproj -scheme GhostGPTUITests -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/simulator CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build-for-testing
+          xcodebuild -project ios/App/App.xcodeproj -scheme GhostGPTUITests -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/simulator IPHONEOS_DEPLOYMENT_TARGET=17.0 CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build-for-testing
 
       - name: Boot latest iOS 27 simulator and validate iPhone 15 / 16 Pro Max compatibility
         shell: bash
@@ -245,6 +245,7 @@ jobs:
                   "-test-timeouts-enabled", "YES",
                   "-default-test-execution-time-allowance", "180",
                   "-maximum-test-execution-time-allowance", "240",
+                  "IPHONEOS_DEPLOYMENT_TARGET=17.0",
                   "CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO",
                   "CODE_SIGN_IDENTITY=", "test-without-building"
               ], 1200)
