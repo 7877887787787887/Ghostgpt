@@ -69,81 +69,76 @@ jobs:
           xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/simulator IPHONEOS_DEPLOYMENT_TARGET=17.0 CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
           test -d build/simulator/Build/Products/Debug-iphonesimulator/App.app
 
-      - name: Boot simulator and smoke-test app launch
+      - name: Boot iPhone 15 and iPhone 16 Pro Max on latest iOS 27
         shell: bash
         run: |
           set -euo pipefail
-          echo "Listing available iPhone simulators (30-second limit)..."
-          DEVICE_LIST="$(python3 -c 'import subprocess; print(subprocess.run(["xcrun", "simctl", "list", "devices", "available"], capture_output=True, text=True, timeout=30, check=True).stdout, end="")')" || { echo "xcrun simctl list devices failed or timed out" >&2; exit 124; }
-          printf "%s\n" "$DEVICE_LIST"
-          # Prefer a smaller, commonly available iPhone simulator. The first
-          # listed device can be a Pro Max runtime with a slow cold boot.
-          DEVICE_ID="$(printf "%s\n" "$DEVICE_LIST" | sed -nE 's/.*iPhone 17e[^()]*\(([0-9A-F-]{36})\).*/\1/p' | head -n 1)"
-          if [[ -z "$DEVICE_ID" ]]; then
-            DEVICE_ID="$(printf "%s\n" "$DEVICE_LIST" | sed -nE 's/.*iPhone 17[^()]*\(([0-9A-F-]{36})\).*/\1/p' | head -n 1)"
-          fi
-          if [[ -z "$DEVICE_ID" ]]; then
-            DEVICE_ID="$(printf "%s\n" "$DEVICE_LIST" | sed -nE 's/.*iPhone[^()]*\(([0-9A-F-]{36})\).*/\1/p' | head -n 1)"
-          fi
-          if [[ -z "$DEVICE_ID" ]]; then
-            echo "No available iPhone simulator runtime was found."
-            xcrun simctl list devices available
-            exit 1
-          fi
-          echo "Selected simulator: $DEVICE_ID"
-          export DEVICE_ID
           python3 - <<'PY'
-          import os
+          import json
+          import re
           import subprocess
           import sys
           import time
           from pathlib import Path
 
-          device = os.environ["DEVICE_ID"]
+          def output(args, timeout=60):
+              return subprocess.run(args, check=True, capture_output=True, text=True, timeout=timeout).stdout
+
+          runtimes = json.loads(output(["xcrun", "simctl", "list", "runtimes", "--json"]))["runtimes"]
+          ios = [r for r in runtimes if r.get("isAvailable") and r.get("identifier", "").startswith("com.apple.CoreSimulator.SimRuntime.iOS-27-")]
+          if not ios:
+              raise SystemExit("No available iOS 27 simulator runtime is installed on this runner.")
+          runtime = sorted(ios, key=lambda r: tuple(int(x) for x in re.findall(r"\d+", r.get("version", "0"))))[-1]
+          runtime_id = runtime["identifier"]
+          print(f"Using latest installed iOS 27 runtime: {runtime.get('version')} ({runtime_id})", flush=True)
+
+          types = json.loads(output(["xcrun", "simctl", "list", "devicetypes", "--json"]))["devicetypes"]
+          required = [
+              ("iPhone 15", "com.apple.CoreSimulator.SimDeviceType.iPhone-15"),
+              ("iPhone 16 Pro Max", "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro-Max"),
+          ]
+          available_types = {d["identifier"] for d in types}
+          devices = []
+          for label, type_id in required:
+              if type_id not in available_types:
+                  raise SystemExit(f"Required simulator device type is unavailable: {label} ({type_id})")
+              udid = output(["xcrun", "simctl", "create", f"GhostGPT {label} iOS 27", type_id, runtime_id]).strip()
+              devices.append((label, udid))
 
           def run(label, args, timeout):
-              print(f"Running {label} (timeout={timeout}s): {' '.join(args)}", flush=True)
+              print(f"Running {label}: {' '.join(args)}", flush=True)
               try:
                   result = subprocess.run(args, timeout=timeout, check=False)
               except subprocess.TimeoutExpired:
-                  print(f"Timed out during {label} after {timeout}s", file=sys.stderr, flush=True)
-                  sys.exit(124)
-              if result.returncode != 0:
-                  print(f"{label} failed with exit code {result.returncode}", file=sys.stderr, flush=True)
-                  sys.exit(result.returncode or 1)
+                  raise SystemExit(f"Timed out during {label} after {timeout}s")
+              if result.returncode:
+                  raise SystemExit(f"{label} failed with exit code {result.returncode}")
 
-          # Boot may report that the device is already booted; that is harmless.
-          try:
-              subprocess.run(["xcrun", "simctl", "boot", device], timeout=30,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-          except subprocess.TimeoutExpired:
-              print("Timed out while requesting simulator boot", file=sys.stderr, flush=True)
-              sys.exit(124)
+          for label, udid in devices:
+              print(f"\n=== {label} ({udid}) ===", flush=True)
+              run(f"{label} boot request", ["xcrun", "simctl", "boot", udid], 45)
+              run(f"{label} boot", ["xcrun", "simctl", "bootstatus", udid, "-b"], 420)
+              run(f"{label} install", ["xcrun", "simctl", "install", udid,
+                                       "build/simulator/Build/Products/Debug-iphonesimulator/App.app"], 120)
+              run(f"{label} launch", ["xcrun", "simctl", "launch", udid, "io.corelo.ghostgpt",
+                                      "-modelProvider", "Cloudflare", "-autoStartPCModel", "false"], 90)
+              time.sleep(3)
+              screenshot = f"simulator-smoke-{label.lower().replace(' ', '-')}.png"
+              run(f"{label} screenshot", ["xcrun", "simctl", "io", udid, "screenshot", screenshot], 45)
+              path = Path(screenshot)
+              if not path.is_file() or path.stat().st_size == 0:
+                  raise SystemExit(f"{label} screenshot missing or empty")
+              run(f"{label} Vision screen verification",
+                  ["swift", "ios-native/verify-simulator-screen.swift", screenshot], 180)
 
-          run("simulator boot", ["xcrun", "simctl", "bootstatus", device, "-b"], 420)
-          run("app install", ["xcrun", "simctl", "install", device,
-                              "build/simulator/Build/Products/Debug-iphonesimulator/App.app"], 120)
-          # CI runners are not on the user's private Tailscale network. Select the
-          # cloud provider for this launch so smoke testing doesn't make a real
-          # PC-gateway request or misreport missing tailnet access as an app failure.
-          run("app launch", ["xcrun", "simctl", "launch", device, "io.corelo.ghostgpt",
-                             "-modelProvider", "Cloudflare", "-autoStartPCModel", "false"], 90)
-          time.sleep(2)
-          run("screenshot capture", ["xcrun", "simctl", "io", device, "screenshot",
-                                     "simulator-smoke.png"], 45)
-          if not Path("simulator-smoke.png").is_file() or Path("simulator-smoke.png").stat().st_size == 0:
-              print("Simulator screenshot is missing or empty", file=sys.stderr, flush=True)
-              sys.exit(1)
-          run("Vision screen text verification",
-              ["swift", "ios-native/verify-simulator-screen.swift", "simulator-smoke.png"], 180)
+          print("\nBoth requested iPhone simulator launches passed.", flush=True)
           PY
-        continue-on-error: false
 
       - name: Upload simulator screenshot
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: GhostGPT-simulator-smoke
-          path: simulator-smoke.png
+          path: simulator-smoke-*.png
           if-no-files-found: ignore
           retention-days: 7
