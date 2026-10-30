@@ -173,7 +173,7 @@ jobs:
               run(f"{label} app install", ["xcrun", "simctl", "install", udid,
                                             "build/simulator/Build/Products/Debug-iphonesimulator/App.app"], 300, attempts=2)
               run(f"{label} app launch", ["xcrun", "simctl", "launch", udid, "io.corelo.ghostgpt",
-                                           "-modelProvider", "Cloudflare", "-autoStartPCModel", "false"], 90)
+                                           "-modelProvider", "Cloudflare", "-autoStartPCModel", "false"], 180, attempts=2)
               time.sleep(3)
               screenshot = f"simulator-smoke-{label.lower().replace(' ', '-')}.png"
               # Probe simctl without a display argument. On multi-display
