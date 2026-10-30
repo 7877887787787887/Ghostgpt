@@ -31,6 +31,25 @@ class NativeAgentToolLoopTests(unittest.TestCase):
         self.assertIn('messages.append(ChatMessage(text: "Tool result', agent)
         self.assertNotIn('"riskConfirmed": true', agent)
 
+
+    def test_lm_studio_agent_uses_openai_tools_and_separate_gateway_credentials(self):
+        self.assertIn('modelProvider == ModelProvider.lmStudio.rawValue && aiTerminalToolsEnabled', SOURCE)
+        start = SOURCE.index('private func runLMStudioAgent(history:')
+        end = SOURCE.index('private func retryLastMessage()', start)
+        agent = SOURCE[start:end]
+        self.assertIn('localModelEndpoint', agent)
+        self.assertIn('v1/chat/completions', agent)
+        self.assertIn('choices.first?["message"]', agent)
+        self.assertIn('"tool_choice": "auto"', agent)
+        self.assertIn('KeychainStore.migratedValue(for: "localModelAPIKey")', agent)
+        self.assertIn('KeychainStore.migratedValue(for: "terminalGatewayToken")', agent)
+        self.assertIn('Bearer \\(modelToken)', agent)
+        self.assertIn('Bearer \\(terminalToken)', agent)
+        self.assertIn('"tool_call_id": toolCallID', agent)
+        self.assertIn('"riskConfirmed": false', agent)
+        self.assertNotIn('ollamaModelID', agent)
+        self.assertNotIn('api/chat', agent)
+
     def test_gateway_policy_and_docs_keep_mutations_out_of_automatic_chat_tools(self):
         self.assertIn('GHOSTGPT_ALLOW_MODIFYING_COMMANDS', (ROOT / "windows" / "lmstudio_gateway.py").read_text(encoding="utf-8"))
         self.assertIn('Modifying commands are not automatically executed', README)
