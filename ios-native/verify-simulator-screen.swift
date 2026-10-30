@@ -11,6 +11,7 @@ guard CommandLine.arguments.count == 2 else {
     fail("Usage: verify-simulator-screen.swift <screenshot.png>")
 }
 
+fputs("GhostGPT verification: decoding screenshot\n", stderr)
 let imageURL = URL(fileURLWithPath: CommandLine.arguments[1])
 guard FileManager.default.fileExists(atPath: imageURL.path) else {
     fail("Screenshot does not exist: \(imageURL.path)")
@@ -36,6 +37,7 @@ request.recognitionLanguages = ["en-US"]
 request.usesLanguageCorrection = false
 request.minimumTextHeight = 0.005
 
+fputs("GhostGPT verification: starting Vision OCR\n", stderr)
 do {
     let handler = VNImageRequestHandler(cgImage: image, orientation: .up, options: [:])
     try handler.perform([request])
@@ -44,6 +46,7 @@ do {
     fail("Vision text recognition threw \(nsError.domain) code \(nsError.code): \(nsError.localizedDescription)")
 }
 
+fputs("GhostGPT verification: Vision OCR completed\n", stderr)
 let visibleText = (request.results ?? [])
     .compactMap { $0.topCandidates(1).first?.string }
     .joined(separator: "\n")
