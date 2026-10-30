@@ -11,11 +11,13 @@ abort 'UI test target already exists' if project.targets.any? { |target| target.
 FileUtils.mkdir_p('ios/App/GhostGPTUITests')
 FileUtils.cp('ios-native/GhostGPTUITests.swift', 'ios/App/GhostGPTUITests/GhostGPTUITests.swift')
 target = project.new_target(:ui_test_bundle, 'GhostGPTUITests', :ios, '17.0')
+target.product_name = 'GhostGPTUITests'
 target.add_dependency(app)
 group = project.main_group.new_group('GhostGPTUITests', 'GhostGPTUITests')
 target.source_build_phase.add_file_reference(group.new_file('GhostGPTUITests.swift'))
 target.build_configurations.each do |config|
   config.build_settings.merge!({
+    'PRODUCT_NAME' => '$(TARGET_NAME)',
     'PRODUCT_BUNDLE_IDENTIFIER' => 'io.corelo.ghostgpt.uitests',
     'GENERATE_INFOPLIST_FILE' => 'YES',
     'SWIFT_VERSION' => '5.0',
