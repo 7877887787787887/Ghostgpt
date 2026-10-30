@@ -26,7 +26,7 @@ let thumbnailOptions: [CFString: Any] = [
     kCGImageSourceThumbnailMaxPixelSize: 1200,
     kCGImageSourceCreateThumbnailWithTransform: true
 ]
-guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) else {
+guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) else {
     fail("ImageIO could not decode/downsample screenshot: \(imageURL.path)")
 }
 
