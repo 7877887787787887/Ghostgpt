@@ -176,29 +176,30 @@ jobs:
                                            "-modelProvider", "Cloudflare", "-autoStartPCModel", "false"], 90)
               time.sleep(3)
               screenshot = f"simulator-smoke-{label.lower().replace(' ', '-')}.png"
-              # Multi-display iOS 27 simulator profiles require an explicit
-              # display. Select the primary LCD dynamically from simctl output.
-              display_info = subprocess.run(
-                  ["xcrun", "simctl", "io", udid, "screenshot", "--help"],
-                  capture_output=True, text=True, timeout=30, check=False
+              # Probe simctl without a display argument. On multi-display
+              # devices, its error lists the available displays and marks primary.
+              probe = subprocess.run(
+                  ["xcrun", "simctl", "io", udid, "screenshot", screenshot],
+                  capture_output=True, text=True, timeout=60, check=False
               )
-              display_lines = (display_info.stdout + "\\n" + display_info.stderr).splitlines()
+              probe_text = probe.stdout + "\\n" + probe.stderr
               primary_match = next(
                   (re.search(r"--display=(\\d+).*\\(primary\\)", line)
-                   for line in display_lines if "(primary)" in line),
+                   for line in probe_text.splitlines() if "(primary)" in line),
                   None
               )
-              if not primary_match:
-                  # simctl documents display=1 as the primary LCD on the runner's
-                  # current multi-display device profile; fail with diagnostics otherwise.
-                  print("\\n".join(display_lines), flush=True)
-                  raise SystemExit(f"Could not identify primary display for {label}")
-              primary_display = primary_match.group(1)
-              screenshot_args = [
-                  "xcrun", "simctl", "io", udid, "screenshot",
-                  f"--display={primary_display}", screenshot
-              ]
-              run(f"{label} screenshot", screenshot_args, 120, attempts=2)
+              if probe.returncode == 0:
+                  print(f"{label} screenshot captured using default display", flush=True)
+              else:
+                  if not primary_match:
+                      print(probe_text, file=sys.stderr, flush=True)
+                      raise SystemExit(f"Could not identify primary display for {label}")
+                  primary_display = primary_match.group(1)
+                  screenshot_args = [
+                      "xcrun", "simctl", "io", udid, "screenshot",
+                      f"--display={primary_display}", screenshot
+                  ]
+                  run(f"{label} screenshot", screenshot_args, 120, attempts=2)
               path = Path(screenshot)
               if not path.is_file() or path.stat().st_size == 0:
                   raise SystemExit(f"{label} screenshot missing or empty")
