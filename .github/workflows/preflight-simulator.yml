@@ -62,6 +62,20 @@ jobs:
           mkdir -p ios/App/App/public
           test ! -e ios/App/App/public/index.html
 
+      - name: Compile screenshot verifier before simulator boot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          python3 - <<'PY'
+          import subprocess
+          subprocess.run([
+              "xcrun", "swiftc", "-O",
+              "ios-native/verify-simulator-screen.swift",
+              "-o", "build/verify-simulator-screen"
+          ], check=True, timeout=180)
+          PY
+
       - name: Build simulator app
         shell: bash
         run: |
@@ -204,7 +218,7 @@ jobs:
               if not path.is_file() or path.stat().st_size == 0:
                   raise SystemExit(f"{label} screenshot missing or empty")
               run(f"{label} screen verification",
-                  ["swift", "ios-native/verify-simulator-screen.swift", screenshot], 180)
+                  ["build/verify-simulator-screen", screenshot], 180)
 
           print("\nAll iOS 27 simulator smoke tests completed.", flush=True)
           PY
