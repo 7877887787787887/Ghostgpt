@@ -176,7 +176,10 @@ jobs:
                                            "-modelProvider", "Cloudflare", "-autoStartPCModel", "false"], 90)
               time.sleep(3)
               screenshot = f"simulator-smoke-{label.lower().replace(' ', '-')}.png"
-              run(f"{label} screenshot", ["xcrun", "simctl", "io", udid, "screenshot", "--display=1", screenshot], 45)
+              # Prefer the Simulator screenshot service. simctl screenshot can hang
+              # on multi-display iOS 27 devices even after a successful launch.
+              screenshot_args = ["xcrun", "simctl", "io", udid, "screenshot", screenshot]
+              run(f"{label} screenshot", screenshot_args, 120, attempts=2)
               path = Path(screenshot)
               if not path.is_file() or path.stat().st_size == 0:
                   raise SystemExit(f"{label} screenshot missing or empty")
