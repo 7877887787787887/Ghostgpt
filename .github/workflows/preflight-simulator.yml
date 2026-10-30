@@ -18,7 +18,7 @@ jobs:
   preflight:
     name: Unit tests and simulator launch
     runs-on: xcode-27
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -76,12 +76,21 @@ jobs:
           echo "Listing available iPhone simulators (30-second limit)..."
           DEVICE_LIST="$(python3 -c 'import subprocess; print(subprocess.run(["xcrun", "simctl", "list", "devices", "available"], capture_output=True, text=True, timeout=30, check=True).stdout, end="")')" || { echo "xcrun simctl list devices failed or timed out" >&2; exit 124; }
           printf "%s\n" "$DEVICE_LIST"
-          DEVICE_ID="$(printf "%s\n" "$DEVICE_LIST" | sed -nE 's/.*iPhone[^()]*\(([0-9A-F-]{36})\).*/\1/p' | head -n 1)"
+          # Prefer a smaller, commonly available iPhone simulator. The first
+          # listed device can be a Pro Max runtime with a slow cold boot.
+          DEVICE_ID="$(printf "%s\n" "$DEVICE_LIST" | sed -nE 's/.*iPhone 17e[^()]*\(([0-9A-F-]{36})\).*/\1/p' | head -n 1)"
+          if [[ -z "$DEVICE_ID" ]]; then
+            DEVICE_ID="$(printf "%s\n" "$DEVICE_LIST" | sed -nE 's/.*iPhone 17[^()]*\(([0-9A-F-]{36})\).*/\1/p' | head -n 1)"
+          fi
+          if [[ -z "$DEVICE_ID" ]]; then
+            DEVICE_ID="$(printf "%s\n" "$DEVICE_LIST" | sed -nE 's/.*iPhone[^()]*\(([0-9A-F-]{36})\).*/\1/p' | head -n 1)"
+          fi
           if [[ -z "$DEVICE_ID" ]]; then
             echo "No available iPhone simulator runtime was found."
             xcrun simctl list devices available
             exit 1
           fi
+          echo "Selected simulator: $DEVICE_ID"
           export DEVICE_ID
           python3 - <<'PY'
           import os
@@ -111,7 +120,7 @@ jobs:
               print("Timed out while requesting simulator boot", file=sys.stderr, flush=True)
               sys.exit(124)
 
-          run("simulator boot", ["xcrun", "simctl", "bootstatus", device, "-b"], 180)
+          run("simulator boot", ["xcrun", "simctl", "bootstatus", device, "-b"], 420)
           run("app install", ["xcrun", "simctl", "install", device,
                               "build/simulator/Build/Products/Debug-iphonesimulator/App.app"], 120)
           # CI runners are not on the user's private Tailscale network. Select the
