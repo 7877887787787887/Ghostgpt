@@ -145,21 +145,33 @@ jobs:
               candidates.sort(key=model_rank, reverse=True)
               devices = [(candidates[0]["name"], candidates[0]["udid"])]
 
-          def run(label, args, timeout):
-              print(f"Running {label}: {' '.join(args)}", flush=True)
-              try:
-                  p = subprocess.run(args, timeout=timeout, check=False)
-              except subprocess.TimeoutExpired:
-                  raise SystemExit(f"Timed out during {label} after {timeout}s")
-              if p.returncode:
-                  raise SystemExit(f"{label} failed with exit code {p.returncode}")
+          def run(label, args, timeout, attempts=1):
+              for attempt in range(1, attempts + 1):
+                  print(f"Running {label} (attempt {attempt}/{attempts}): {' '.join(args)}", flush=True)
+                  try:
+                      p = subprocess.run(args, timeout=timeout, check=False)
+                  except subprocess.TimeoutExpired:
+                      if attempt == attempts:
+                          raise SystemExit(f"Timed out during {label} after {timeout}s on {attempts} attempt(s)")
+                      print(f"{label} timed out; retrying after CoreSimulator diagnostics", flush=True)
+                      subprocess.run(["xcrun", "simctl", "list", "devices", "booted"], timeout=30, check=False)
+                      time.sleep(10)
+                      continue
+                  if p.returncode == 0:
+                      return
+                  if attempt == attempts:
+                      raise SystemExit(f"{label} failed with exit code {p.returncode}")
+                  print(f"{label} exited {p.returncode}; retrying after 10 seconds", flush=True)
+                  time.sleep(10)
 
           for label, udid in devices:
               print(f"\n=== Smoke test: {label} / iOS {runtime.get('version')} ===", flush=True)
               run(f"{label} boot", ["xcrun", "simctl", "boot", udid], 60)
               run(f"{label} boot readiness", ["xcrun", "simctl", "bootstatus", udid, "-b"], 420)
+              # First install can be slow on a freshly booted iOS 27 simulator.
+              # Allow a longer window and retry transient CoreSimulator stalls.
               run(f"{label} app install", ["xcrun", "simctl", "install", udid,
-                                            "build/simulator/Build/Products/Debug-iphonesimulator/App.app"], 120)
+                                            "build/simulator/Build/Products/Debug-iphonesimulator/App.app"], 300, attempts=2)
               run(f"{label} app launch", ["xcrun", "simctl", "launch", udid, "io.corelo.ghostgpt",
                                            "-modelProvider", "Cloudflare", "-autoStartPCModel", "false"], 90)
               time.sleep(3)
