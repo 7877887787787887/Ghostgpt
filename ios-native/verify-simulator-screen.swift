@@ -18,8 +18,16 @@ guard FileManager.default.fileExists(atPath: imageURL.path) else {
 guard let source = CGImageSourceCreateWithURL(imageURL as CFURL, nil) else {
     fail("ImageIO could not open screenshot: \(imageURL.path)")
 }
-guard let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-    fail("ImageIO could not decode screenshot: \(imageURL.path)")
+// Downsample high-resolution simulator captures before OCR. This keeps
+// Vision fast and predictable on shared CI runners while preserving enough
+// pixels to recognize the app title.
+let thumbnailOptions: [CFString: Any] = [
+    kCGImageSourceCreateThumbnailFromImageAlways: true,
+    kCGImageSourceThumbnailMaxPixelSize: 1200,
+    kCGImageSourceCreateThumbnailWithTransform: true
+]
+guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) else {
+    fail("ImageIO could not decode/downsample screenshot: \(imageURL.path)")
 }
 
 let request = VNRecognizeTextRequest()
