@@ -40,7 +40,16 @@ final class GhostGPTUITests: XCTestCase {
     }
 
     private func selectTab(_ title: String) {
-        let tab = app.tabBars.buttons[title]
+        let bottomTab = app.tabBars.buttons[title]
+        // iPhone Duo exposes the system side rail as ordinary buttons, not a
+        // TabBar. Match both the title and its icon identifier to distinguish
+        // the rail from similarly named links inside Settings or Tools.
+        let icons = ["Chat": "bubble.left.and.bubble.right.fill", "Browser": "globe",
+                     "Tools": "terminal", "Settings": "gearshape"]
+        guard let icon = icons[title] else { XCTFail("Unknown tab: \(title)"); return }
+        let tab = bottomTab.exists ? bottomTab : app.buttons.matching(
+            NSPredicate(format: "label == %@ AND identifier == %@", title, icon)
+        ).firstMatch
         XCTAssertTrue(tab.waitForExistence(timeout: 10), "Missing tab: \(title)")
         tab.tap()
     }
@@ -101,7 +110,10 @@ final class GhostGPTUITests: XCTestCase {
         app.buttons["PowerShell terminal"].tap()
         let status = app.staticTexts["ghost.terminal.status"]
         XCTAssertTrue(status.waitForExistence(timeout: 10))
-        XCTAssertTrue(status.label.contains("Configure a valid HTTPS gateway URL"), status.label)
+        let rejected = expectation(for: NSPredicate(
+            format: "label CONTAINS %@", "Configure a valid HTTPS gateway URL"
+        ), evaluatedWith: status)
+        wait(for: [rejected], timeout: 10)
         XCTAssertFalse(app.buttons["Run reviewed command"].isEnabled)
     }
 }
