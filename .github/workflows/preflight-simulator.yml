@@ -182,9 +182,9 @@ jobs:
                   ["xcrun", "simctl", "io", udid, "screenshot", screenshot],
                   capture_output=True, text=True, timeout=60, check=False
               )
-              probe_text = probe.stdout + "\\n" + probe.stderr
+              probe_text = probe.stdout + "\n" + probe.stderr
               primary_match = next(
-                  (re.search(r"--display=(\\d+).*\\(primary\\)", line)
+                  (re.search(r"--display=(\d+).*\(primary\)", line)
                    for line in probe_text.splitlines() if "(primary)" in line),
                   None
               )
