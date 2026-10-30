@@ -28,6 +28,10 @@ end
 project.root_object.attributes['TargetAttributes'] ||= {}
 project.root_object.attributes['TargetAttributes'][target.uuid] = { 'TestTargetID' => app.uuid }
 project.save
+# Once a shared scheme exists, do not rely on Xcode's implicit App scheme.
+app_scheme = Xcodeproj::XCScheme.new
+app_scheme.configure_with_targets(app, nil, launch_target: true)
+app_scheme.save_as(project_path, 'App', true)
 scheme = Xcodeproj::XCScheme.new
 scheme.configure_with_targets(app, target, launch_target: true)
 scheme.save_as(project_path, 'GhostGPTUITests', true)
