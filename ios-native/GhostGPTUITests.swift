@@ -116,4 +116,18 @@ final class GhostGPTUITests: XCTestCase {
         wait(for: [rejected], timeout: 10)
         XCTAssertFalse(app.buttons["Run reviewed command"].isEnabled)
     }
+
+    func testFailedBrowserPageShowsRecoveryInsteadOfBlankScreen() {
+        launch()
+        selectTab("Browser")
+        let address = app.textFields["ghost.browser.address"]
+        XCTAssertTrue(address.waitForExistence(timeout: 10))
+        address.tap()
+        let current = address.value as? String ?? ""
+        address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count)
+            + "https://ghostgpt-offline.invalid\n")
+        XCTAssertTrue(app.staticTexts["ghost.browser.error"].waitForExistence(timeout: 45))
+        XCTAssertTrue(app.buttons["Retry page"].exists)
+        XCTAssertTrue(app.textFields["ghost.browser.address"].exists)
+    }
 }
