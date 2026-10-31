@@ -1,0 +1,119 @@
+name: Build authorized signed iOS IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-signed-ipa:
+    name: Sign and package native iOS app
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      IOS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.IOS_SIGNING_CERTIFICATE_BASE64 }}
+      IOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.IOS_SIGNING_CERTIFICATE_PASSWORD }}
+      IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+      IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+      SIGNING_DIR: ${{ runner.temp }}/ghostgpt-signing
+      KEYCHAIN_PATH: ${{ runner.temp }}/ghostgpt-signing.keychain-db
+      KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate authorized signing material
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in IOS_SIGNING_CERTIFICATE_BASE64 IOS_SIGNING_CERTIFICATE_PASSWORD IOS_PROVISIONING_PROFILE_BASE64 IOS_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required repository secret: $name" >&2
+              exit 1
+            fi
+          done
+          mkdir -p "$SIGNING_DIR" "$HOME/Library/MobileDevice/Provisioning Profiles"
+          printf '%s' "$IOS_SIGNING_CERTIFICATE_BASE64" | base64 --decode > "$SIGNING_DIR/signing.p12"
+          printf '%s' "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$SIGNING_DIR/profile.mobileprovision"
+          security cms -D -i "$SIGNING_DIR/profile.mobileprovision" > "$SIGNING_DIR/profile.plist"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$SIGNING_DIR/profile.plist")
+          APPLICATION_IDENTIFIER=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$SIGNING_DIR/profile.plist")
+          PROFILE_TEAM=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.team-identifier' "$SIGNING_DIR/profile.plist")
+          test "$APPLICATION_IDENTIFIER" = "$IOS_TEAM_ID.io.corelo.ghostgpt"
+          test "$PROFILE_TEAM" = "$IOS_TEAM_ID"
+          cp "$SIGNING_DIR/profile.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          {
+            echo "PROFILE_UUID=$PROFILE_UUID"
+          } >> "$GITHUB_ENV"
+
+      - name: Create temporary signing keychain
+        shell: bash
+        run: |
+          set -euo pipefail
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$SIGNING_DIR/signing.p12" -k "$KEYCHAIN_PATH" -P "$IOS_SIGNING_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -q 'valid identities found'
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Generate native Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          npx cap add ios
+          npx cap sync ios
+          cp ios-native/AppDelegate.swift ios/App/App/AppDelegate.swift
+          cp ios-native/SceneDelegate.swift ios/App/App/SceneDelegate.swift
+          rm -rf ios/App/App/public
+          mkdir -p ios/App/App/public
+
+      - name: Build authorized device app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/ios \
+            IPHONEOS_DEPLOYMENT_TARGET=17.0 \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" \
+            build
+
+      - name: Package and verify signed IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path='build/ios/Build/Products/Release-iphoneos/App.app'
+          test -d "$app_path"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$app_path"
+          mkdir -p dist/Payload
+          /usr/bin/ditto "$app_path" dist/Payload/App.app
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent dist/Payload dist/GhostGPT-signed.ipa
+          /usr/bin/unzip -tq dist/GhostGPT-signed.ipa
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: GhostGPT-signed-iOS-IPA
+          path: dist/GhostGPT-signed.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove temporary signing material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -rf "$SIGNING_DIR" "$HOME/Library/MobileDevice/Provisioning Profiles/${PROFILE_UUID:-missing}.mobileprovision"
+          security delete-keychain "$KEYCHAIN_PATH" || true
