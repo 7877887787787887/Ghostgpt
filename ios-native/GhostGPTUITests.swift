@@ -36,7 +36,8 @@ final class GhostGPTUITests: XCTestCase {
     }
 
     private var composer: XCUIElement {
-        app.descendants(matching: .any).matching(identifier: "ghost.chat.composer").firstMatch
+        let field = app.textFields["ghost.chat.composer"]
+        return field.exists ? field : app.textViews["ghost.chat.composer"]
     }
 
     private func selectTab(_ title: String) {
