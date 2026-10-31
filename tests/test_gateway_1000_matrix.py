@@ -43,7 +43,9 @@ class Gateway1000Matrix(unittest.TestCase):
                                 f"Get-Process -ComputerName remote{i}",
                                 f"Get-Content \\\\remote{i}\\share\\file.txt",
                                 f"Get-Content C:\\logs\\case{i}*.txt",
-                            ][i % 5]
+                                f"Get-Process -c remote{i}",
+                                f"Get-Process -Co'mp'uterName remote{i}",
+                            ][i % 7]
                         elif family in (5, 6, 7):
                             payload.update(mode="ssh", host="trusted-pi", username="pi")
                             if family == 5:

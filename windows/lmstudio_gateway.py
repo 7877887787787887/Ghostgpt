@@ -420,11 +420,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "Command is empty or exceeds the 12000-character limit."})
             return
         lowered = command.casefold()
-        parameters = lowered.split()[1:]
-        if "\\\\" in command or any(p.startswith(("-comp", "-cims", "-pssess", "-sess", "-cred")) or p == "-cn" or p.startswith("-cn:") for p in parameters):
+        unquoted = lowered.replace("'", "").replace('"', "")
+        parameters = [p.lstrip("-").split(":", 1)[0] for p in unquoted.split()[1:] if p.startswith("-")]
+        remote_parameters = ("computername", "cimsession", "pssession", "session", "credential")
+        if "\\\\" in command or any(p == "cn" or (p and any(name.startswith(p) for name in remote_parameters)) for p in parameters):
             self.send_json(403, {"error": "Remote sessions and UNC paths are not allowed in local PowerShell diagnostics."})
             return
-        unquoted = lowered.replace("'", "").replace('"', "")
         if any(marker in unquoted for marker in (".token", "pairing.code", "pairing.state", "public-model-pairing", "ghostgpt_gateway_token", "ghostgpt_gateway_token_file", ".ssh", "id_rsa", "id_ed25519", ".env", "login data", "keychain", "\\sam", "\\security")):
             self.send_json(403, {"error": "Credential and gateway-secret paths are blocked in diagnostic commands."})
             return
