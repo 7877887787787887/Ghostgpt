@@ -49,7 +49,7 @@ final class GhostGPTUITests: XCTestCase {
             NSPredicate(format: "label == %@", title)
         ).firstMatch
         let tab = bottomTab.exists ? bottomTab : sideRailTab
-        XCTAssertTrue(tab.waitForExistence(timeout: 10), "Missing tab: \\(title)")
+        XCTAssertTrue(tab.waitForExistence(timeout: 10), "Missing tab: \(title)")
         tab.tap()
     }
 
