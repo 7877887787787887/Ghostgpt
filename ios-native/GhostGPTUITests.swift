@@ -36,20 +36,19 @@ final class GhostGPTUITests: XCTestCase {
     }
 
     private var composer: XCUIElement {
-        app.descendants(matching: .any).matching(identifier: "ghost.chat.composer").firstMatch
+        let field = app.textFields["ghost.chat.composer"]
+        return field.exists ? field : app.textViews["ghost.chat.composer"]
     }
 
     private func selectTab(_ title: String) {
         let bottomTab = app.tabBars.buttons[title]
-        // iPhone Duo exposes the system side rail as ordinary buttons, not a
-        // TabBar. Match both the title and its icon identifier to distinguish
-        // the rail from similarly named links inside Settings or Tools.
-        let icons = ["Chat": "bubble.left.and.bubble.right.fill", "Browser": "globe",
-                     "Tools": "terminal", "Settings": "gearshape"]
-        guard let icon = icons[title] else { XCTFail("Unknown tab: \(title)"); return }
-        let tab = bottomTab.exists ? bottomTab : app.buttons.matching(
-            NSPredicate(format: "label == %@ AND identifier == %@", title, icon)
+        // TabView items can be exposed as ordinary buttons on iPad side rails.
+        // Their accessibility identifier is not guaranteed to equal the SF
+        // Symbol name, so use the user-visible tab label as the stable query.
+        let sideRailTab = app.buttons.matching(
+            NSPredicate(format: "label == %@", title)
         ).firstMatch
+        let tab = bottomTab.exists ? bottomTab : sideRailTab
         XCTAssertTrue(tab.waitForExistence(timeout: 10), "Missing tab: \(title)")
         tab.tap()
     }
@@ -115,5 +114,19 @@ final class GhostGPTUITests: XCTestCase {
         ), evaluatedWith: status)
         wait(for: [rejected], timeout: 10)
         XCTAssertFalse(app.buttons["Run reviewed command"].isEnabled)
+    }
+
+    func testFailedBrowserPageShowsRecoveryInsteadOfBlankScreen() {
+        launch()
+        selectTab("Browser")
+        let address = app.textFields["ghost.browser.address"]
+        XCTAssertTrue(address.waitForExistence(timeout: 10))
+        address.tap()
+        let current = address.value as? String ?? ""
+        address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count)
+            + "https://ghostgpt-offline.invalid\n")
+        XCTAssertTrue(app.staticTexts["ghost.browser.error"].waitForExistence(timeout: 45))
+        XCTAssertTrue(app.buttons["Retry page"].exists)
+        XCTAssertTrue(app.textFields["ghost.browser.address"].exists)
     }
 }

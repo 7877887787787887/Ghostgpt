@@ -73,12 +73,17 @@ class Handler(BaseHTTPRequestHandler):
         return bool(expected and sep and scheme.lower()=="bearer" and hmac.compare_digest(supplied,expected))
     def do_POST(self):
         path=self.path.split("?",1)[0]
+        if path!="/pair" and not self.authorized():
+            self.send_json(401,{"error":"Unauthorized"}); return
         try:
             n=int(self.headers.get("Content-Length","0"))
-            if n<0 or n>MAX_BODY: self.send_json(413,{"error":"Request too large"}); return
+            limit=64*1024 if path=="/pair" else MAX_BODY
+            if n<0 or n>limit: self.send_json(413,{"error":"Request too large"}); return
             raw=self.rfile.read(n) if n else b"{}"
             data=json.loads(raw.decode("utf-8"))
         except Exception: self.send_json(400,{"error":"Invalid JSON"}); return
+        if not isinstance(data,dict):
+            self.send_json(400,{"error":"Request body must be a JSON object"}); return
         if path=="/pair":
             if not redeem(str(data.get("code","")).strip().upper(),self.client_address[0]):
                 self.send_json(403,{"error":"Pairing code invalid, expired, already used, or rate-limited"}); return
