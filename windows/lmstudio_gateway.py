@@ -301,7 +301,7 @@ class Handler(BaseHTTPRequestHandler):
             if not token:
                 self.send_json(503, {"error": "Gateway authentication is not configured"})
                 return
-            self.send_json(200, {"ok": True, "token": token, "endpoint": "https://msi.tail28f016.ts.net:10000"})
+            self.send_json(200, {"ok": True, "token": token, "endpoint": "https://msi.tail28f016.ts.net:10003"})
             logging.info("One-time device pairing completed from %s", self.client_address[0])
             return
         if not self.authorize_request():

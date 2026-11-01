@@ -108,7 +108,7 @@ class GatewayAuthenticationTests(unittest.TestCase):
             gateway.Handler.do_POST(handler)
         self.assertEqual(handler.responses[0][0], 200)
         self.assertEqual(handler.responses[0][1]["token"], "test-device-token")
-        self.assertEqual(handler.responses[0][1]["endpoint"], "https://msi.tail28f016.ts.net:10000")
+        self.assertEqual(handler.responses[0][1]["endpoint"], "https://msi.tail28f016.ts.net:10003")
 
     def test_pair_endpoint_rejects_invalid_code_without_disclosing_token(self):
         invalid_body = b'{"code":"WRONG"}'

@@ -1505,14 +1505,14 @@ struct PCModelServerSettingsView: View {
         Form {
             Section("LM Studio on your PC") {
                 Label("PC-only model execution", systemImage: "desktopcomputer").font(.headline)
-                Text("Chat inference runs on your Windows PC in LM Studio. This public HTTPS endpoint is restricted to authenticated model requests; terminal commands remain on the private Tailscale gateway.")
+                Text("Chat runs in LM Studio on your Windows PC through the private Tailscale HTTPS gateway. Connect this iPhone to Tailscale before pairing; the gateway keeps terminal and model requests authenticated.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Toggle("Start automatically when GhostGPT opens", isOn: $autoStartPCModel)
                 TextField("PC HTTPS model endpoint", text: $localModelEndpoint)
                     .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
                 SecureField("Gateway bearer token", text: $localModelAPIKey)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
-                Text("Pair once to save a device access token in iOS Keychain. The public endpoint exposes model inference only; the terminal gateway stays private to Tailscale.")
+                Text("Pair once to save the PC gateway token in iOS Keychain. Model and terminal requests use the private Tailscale gateway and remain separately authorized.")
                     .font(.footnote).foregroundStyle(.secondary)
                 SecureField("One-time PC pairing code", text: $pairingCode)
                     .textInputAutocapitalization(.characters).autocorrectionDisabled()
@@ -1540,7 +1540,7 @@ struct PCModelServerSettingsView: View {
                 Text(status).font(.footnote).textSelection(.enabled)
             }
             Section("Startup behavior") {
-                Text("The PC runs LM Studio locally. A separate public HTTPS gateway permits authenticated model requests only; the terminal gateway remains private to Tailscale. The pairing code is one-time and expires after 30 minutes.")
+                Text("LM Studio runs locally on the PC. The native app connects through Tailscale HTTPS; pairing codes are one-time and expire after 30 minutes.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
@@ -1701,9 +1701,9 @@ struct LocalModelsSettingsView: View {
                 Picker("Provider", selection: $modelProvider) {
                     ForEach(ModelProvider.allCases) { item in Text(item.rawValue).tag(item.rawValue) }
                 }
-                TextField(provider == .cloudflare ? "Cloudflare Worker HTTPS URL" : (provider == .ollama ? "Private PC Ollama HTTPS gateway URL" : "Public PC LM Studio model URL"), text: activeEndpoint)
+                TextField(provider == .cloudflare ? "Cloudflare Worker HTTPS URL" : (provider == .ollama ? "Private PC Ollama HTTPS gateway URL" : "Private PC LM Studio Tailscale URL"), text: activeEndpoint)
                     .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
-                SecureField(provider == .cloudflare ? "Cloudflare bearer token (optional)" : (provider == .ollama ? "Private terminal gateway bearer token" : "Public model gateway bearer token"), text: $providerAPIKey)
+                SecureField(provider == .cloudflare ? "Cloudflare bearer token (optional)" : (provider == .ollama ? "Private terminal gateway bearer token" : "PC model gateway bearer token"), text: $providerAPIKey)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 TextField("Active model ID (optional for Cloudflare)", text: $localModelID)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
