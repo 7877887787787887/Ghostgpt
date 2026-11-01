@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Private loopback gateway for GhostGPT -> LM Studio on this Windows PC."""
 from __future__ import annotations
-import getpass, hashlib, hmac, http.client, json, logging, os, secrets, shutil, subprocess, threading, time
+import getpass, hashlib, hmac, http.client, importlib.util, inspect, json, logging, os, secrets, shlex, shutil, subprocess, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.parse import urlsplit
+
+_workspace_spec = importlib.util.spec_from_file_location("ghostgpt_workspace", Path(__file__).with_name("workspace_files.py"))
+workspace_files = importlib.util.module_from_spec(_workspace_spec)
+_workspace_spec.loader.exec_module(workspace_files)
 
 HOST, PORT = "127.0.0.1", 8767
 UPSTREAM_HOST, UPSTREAM_PORT = "127.0.0.1", 1234
@@ -69,6 +73,33 @@ def allowed_powershell_hosts():
 def command_is_risky(command):
     lowered = command.casefold()
     return any(marker in lowered for marker in RISKY_COMMAND_MARKERS)
+
+def readonly_ssh_command(command):
+    """Return a shell-quoted diagnostic command, or reject executable syntax.
+
+    SSH passes a single command string to the remote shell even with shell=False
+    locally. Never forward the caller's unquoted command string.
+    """
+    if not isinstance(command, str) or not command.strip() or len(command) > 4000:
+        raise ValueError("SSH command is empty or exceeds the 4000-character limit.")
+    if any(ord(c) < 32 or ord(c) == 127 for c in command) or any(c in command for c in ";|&`<>$"):
+        raise ValueError("Shell operators, substitutions, and control characters are blocked for SSH.")
+    parts = shlex.split(command, posix=True)
+    allowed = {"date", "df", "free", "hostname", "id", "ip", "ls", "nproc", "ps", "pwd", "ss", "uname", "uptime", "whoami"}
+    if not parts or parts[0] not in allowed:
+        raise ValueError("SSH command is not on the read-only allow-list.")
+    args = parts[1:]
+    if parts[0] == "date" and any(not (a.startswith("+") or a in {"-u", "--utc", "--universal", "-R", "--rfc-email", "-I", "--iso-8601", "--help", "--version"} or a.startswith(("--iso-8601=", "--rfc-3339="))) for a in args):
+        raise ValueError("Only date display flags and output formats are allowed.")
+    if parts[0] == "hostname" and any(a not in {"-s", "--short", "-f", "--fqdn", "--long", "-d", "--domain", "-i", "--ip-address", "-I", "--all-ip-addresses", "-a", "--alias", "-A", "--all-fqdns", "--help", "--version"} for a in args):
+        raise ValueError("Changing hostname is not allowed.")
+    if parts[0] == "ss" and any(not (a in {"--tcp", "--udp", "--listening", "--numeric", "--processes", "--all", "--summary", "--extended", "--info", "--options", "--memory", "--ipv4", "--ipv6", "--unix", "--help", "--version"} or (a.startswith("-") and not a.startswith("--") and len(a) > 1 and all(c in "tulnparseiom46x" for c in a[1:]))) for a in args):
+        raise ValueError("Only socket display flags are allowed.")
+    if parts[0] == "ip":
+        words = [a for a in args if a not in {"-4", "-6", "-br", "-brief", "-s", "-stats", "-statistics", "-o", "-oneline"}]
+        if not words or words[0] not in {"a", "addr", "address", "l", "link", "r", "route"} or (len(words) > 1 and words[1] not in {"show", "list", "ls"}):
+            raise ValueError("Only IP address, link, and route display is allowed.")
+    return shlex.join(parts), parts[0]
 
 def load_gateway_token():
     token = os.environ.get("GHOSTGPT_GATEWAY_TOKEN", "").strip()
@@ -287,6 +318,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/terminal":
             self.handle_terminal()
             return
+        if path in {"/files/list", "/files/read", "/files/write", "/files/patch"}:
+            self.handle_workspace()
+            return
         if path == "/api/chat":
             self.proxy_to_ollama()
             return
@@ -294,6 +328,61 @@ class Handler(BaseHTTPRequestHandler):
             self.proxy_to_lmstudio()
             return
         self.send_json(404, {"error": "Not found"})
+
+    def handle_workspace(self):
+        payload = self.read_json_body(160 * 1024)
+        if payload is None:
+            return
+        if payload.get("approved") is not True:
+            self.send_json(403, {"ok": False, "error": "Workspace access requires explicit approval"})
+            return
+        payload["action"] = self.path.split("?", 1)[0].rsplit("/", 1)[-1]
+        mode = payload.get("mode", "powershell")
+        allow_write = os.environ.get("GHOSTGPT_ALLOW_FILE_WRITES", "").strip() == "1"
+        if payload["action"] in {"write", "patch"} and (not allow_write or payload.get("riskConfirmed") is not True):
+            self.send_json(403, {"ok": False, "error": "Code edits require gateway file-write opt-in and review confirmation"})
+            return
+        try:
+            if mode == "powershell":
+                root = os.environ.get("GHOSTGPT_WORKSPACE_ROOT", "").strip() or str(Path(__file__).resolve().with_name("workspace"))
+                status, result = workspace_files.workspace_operation(payload, root, allow_write)
+            elif mode == "ssh":
+                host = payload.get("host", "")
+                username = payload.get("username", "")
+                allowed = {h.strip().casefold() for h in os.environ.get("GHOSTGPT_SSH_HOSTS", "").split(",") if h.strip()}
+                if not isinstance(host, str) or host.casefold() not in allowed or host.startswith("-"):
+                    self.send_json(403, {"ok": False, "error": "SSH workspace target is not configured"})
+                    return
+                if not isinstance(username, str) or len(username) > 64 or any(not (c.isalnum() or c in "._-") for c in username):
+                    self.send_json(400, {"ok": False, "error": "Invalid SSH username"})
+                    return
+                executable = shutil.which("ssh.exe") or shutil.which("ssh")
+                if not executable:
+                    self.send_json(503, {"ok": False, "error": "SSH client unavailable"})
+                    return
+                forwarded = {k: payload[k] for k in ("action", "path", "content", "find", "replace", "expected_sha256", "offset", "max_chars", "approved", "riskConfirmed") if k in payload}
+                forwarded["_allow_write"] = allow_write
+                forwarded["_workspace_root"] = os.environ.get("GHOSTGPT_SSH_WORKSPACE_ROOT", "").strip()
+                script = inspect.getsource(workspace_files.workspace_operation) + "\nimport sys,json,pathlib\np=json.load(sys.stdin)\nr=p.pop('_workspace_root','') or str(pathlib.Path.home()/'ghostgpt-workspace')\ns,d=workspace_operation(p,r,p.pop('_allow_write',False))\nprint('GHOSTGPT_WORKSPACE_RESULT:'+json.dumps({'status':s,'data':d}))\n"
+                target = f"{username}@{host}" if username else host
+                command = "python3 -X utf8 -c " + shlex.quote(script)
+                completed = subprocess.run([executable, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes", target, command], input=json.dumps(forwarded), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=30, shell=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                marker = "GHOSTGPT_WORKSPACE_RESULT:"
+                line = next((s[len(marker):] for s in reversed(completed.stdout.splitlines()) if s.startswith(marker)), None)
+                if completed.returncode != 0 or line is None:
+                    self.send_json(503, {"ok": False, "error": "SSH workspace helper failed", "detail": completed.stderr[-1000:]})
+                    return
+                response = json.loads(line)
+                status, result = response["status"], response["data"]
+            else:
+                self.send_json(400, {"ok": False, "error": "Unsupported workspace mode"})
+                return
+            self.send_json(status, result)
+        except subprocess.TimeoutExpired:
+            self.send_json(504, {"ok": False, "error": "SSH workspace operation timed out"})
+        except Exception:
+            logging.exception("Workspace operation failed")
+            self.send_json(503, {"ok": False, "error": "Workspace operation failed; no success is claimed"})
 
     def handle_ssh(self, payload):
         """Run a tightly allow-listed, read-only command through Windows OpenSSH."""
@@ -313,18 +402,10 @@ class Handler(BaseHTTPRequestHandler):
         if not command or len(command) > 4000:
             self.send_json(400, {"error": "SSH command is empty or exceeds the 4000-character limit."})
             return
-        if any(marker in command for marker in (";", "|", "\\n", "\\r", "&&", "||", "`", "<", ">", "$(", "${")):
-            self.send_json(403, {"error": "Compound commands, pipelines, substitutions, and redirection are blocked for SSH."})
-            return
         try:
-            import shlex
-            parts = shlex.split(command, posix=True)
-        except ValueError:
-            self.send_json(400, {"error": "Could not parse SSH command arguments."})
-            return
-        allowed_roots = {"date", "df", "free", "hostname", "id", "ip", "ls", "nproc", "ps", "pwd", "ss", "uname", "uptime", "whoami"}
-        if not parts or parts[0].split("/")[-1] not in allowed_roots:
-            self.send_json(403, {"error": "SSH command is not on the read-only allow-list."})
+            safe_command, root = readonly_ssh_command(command)
+        except ValueError as exc:
+            self.send_json(403, {"error": str(exc)})
             return
         ssh_executable = shutil.which("ssh.exe") or shutil.which("ssh")
         if not ssh_executable:
@@ -332,7 +413,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         target = f"{username}@{host}" if username else host
         try:
-            result = subprocess.run([ssh_executable, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes", target, command], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=25, shell=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            result = subprocess.run([ssh_executable, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes", target, safe_command], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=25, shell=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except subprocess.TimeoutExpired:
             self.send_json(504, {"error": "SSH command exceeded the 25-second execution limit."})
             return
@@ -342,7 +423,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         stdout, stderr = result.stdout or "", result.stderr or ""
         digest = hashlib.sha256(command.encode("utf-8")).hexdigest()[:16]
-        logging.info("SSH execution host=%s root=%s exit=%s command_sha256=%s", host, parts[0], result.returncode, digest)
+        logging.info("SSH execution host=%s root=%s exit=%s command_sha256=%s", host, root, result.returncode, digest)
         self.send_json(200, {"ok": result.returncode == 0, "exit_code": result.returncode, "stdout": stdout[:MAX_TERMINAL_OUTPUT_CHARS], "stderr": stderr[:MAX_TERMINAL_OUTPUT_CHARS], "truncated": len(stdout) > MAX_TERMINAL_OUTPUT_CHARS or len(stderr) > MAX_TERMINAL_OUTPUT_CHARS, "risk": "read-only"})
     def read_json_body(self, limit):
         raw_length = self.headers.get("Content-Length", "0") or "0"
@@ -401,6 +482,18 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "Command is empty or exceeds the 12000-character limit."})
             return
         lowered = command.casefold()
+        unquoted = lowered.replace("'", "").replace('"', "")
+        parameters = [p.lstrip("-").split(":", 1)[0] for p in unquoted.split()[1:] if p.startswith("-")]
+        remote_parameters = ("computername", "cimsession", "pssession", "session", "credential")
+        if "\\\\" in command or any(p == "cn" or (p and any(name.startswith(p) for name in remote_parameters)) for p in parameters):
+            self.send_json(403, {"error": "Remote sessions and UNC paths are not allowed in local PowerShell diagnostics."})
+            return
+        if any(marker in unquoted for marker in (".token", "pairing.code", "pairing.state", "public-model-pairing", "ghostgpt_gateway_token", "ghostgpt_gateway_token_file", ".ssh", "id_rsa", "id_ed25519", ".env", "login data", "keychain", "\\sam", "\\security")):
+            self.send_json(403, {"error": "Credential and gateway-secret paths are blocked in diagnostic commands."})
+            return
+        if lowered.split(None, 1)[0] == "get-content" and any(c in command for c in "*?["):
+            self.send_json(403, {"error": "Read a specific non-secret file; wildcard file reads are not allowed."})
+            return
         if any(marker in lowered for marker in BLOCKED_COMMAND_MARKERS):
             self.send_json(403, {"error": "Encoded, obfuscated, credential-oriented, and download/execute commands are blocked."})
             return
@@ -429,9 +522,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             result = subprocess.run(
                 [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-                 "$ErrorActionPreference = 'Stop';\n" + command],
+                 "$ErrorActionPreference = 'Stop';\n$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);\n" + command],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, timeout=60, shell=False,
+                text=True, encoding="utf-8", errors="replace", timeout=60, shell=False,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except subprocess.TimeoutExpired:

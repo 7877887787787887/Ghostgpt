@@ -42,7 +42,8 @@ jobs:
           grep -q 'private func runOllamaAgent' ios-native/SceneDelegate.swift
           grep -q 'aiTerminalToolsEnabled' ios-native/SceneDelegate.swift
           grep -q 'riskConfirmed' ios-native/SceneDelegate.swift
-          grep -q 'tool_calls' ios-native/SceneDelegate.swift
+          grep -q 'tool_calls' ios-native/NativeAutomation.swift
+          test -s ios-native/NativeAutomation.swift
           grep -q 'def authorize_request' windows/lmstudio_gateway.py
           grep -q 'hmac.compare_digest' windows/lmstudio_gateway.py
           grep -q 'StrictHostKeyChecking=yes' windows/lmstudio_gateway.py
@@ -58,6 +59,7 @@ jobs:
           npx cap sync ios
           cp ios-native/AppDelegate.swift ios/App/App/AppDelegate.swift
           cp ios-native/SceneDelegate.swift ios/App/App/SceneDelegate.swift
+          python3 ios-native/register-native-source.py
           rm -rf ios/App/App/public
           mkdir -p ios/App/App/public
           test ! -e ios/App/App/public/index.html

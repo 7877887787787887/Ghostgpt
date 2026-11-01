@@ -36,7 +36,8 @@ final class GhostGPTUITests: XCTestCase {
     }
 
     private var composer: XCUIElement {
-        app.descendants(matching: .any).matching(identifier: "ghost.chat.composer").firstMatch
+        let field = app.textFields["ghost.chat.composer"]
+        return field.exists ? field : app.textViews["ghost.chat.composer"]
     }
 
     private func selectTab(_ title: String) {
@@ -70,6 +71,22 @@ final class GhostGPTUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Linux sandbox / SSH"].exists)
         selectTab("Chat")
         XCTAssertTrue(app.staticTexts["What can I help with?"].waitForExistence(timeout: 10))
+    }
+
+    func testChatControlsStayInSettingsWhileTyping() {
+        launch()
+        let gear = app.buttons["Chat settings"]
+        XCTAssertTrue(gear.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["Response speed"].exists)
+        composer.tap()
+        XCTAssertTrue(gear.isHittable, "Chat settings shortcut should remain visible with the keyboard open")
+        gear.tap()
+        XCTAssertTrue(app.staticTexts["Chat controls"].waitForExistence(timeout: 10))
+        let responseSpeed = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Response speed")).firstMatch
+        let aiProvider = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "AI provider")).firstMatch
+        XCTAssertTrue(responseSpeed.exists)
+        XCTAssertTrue(aiProvider.exists)
+        XCTAssertTrue(app.switches["AI terminal diagnostics"].exists)
     }
 
     func testEmptyAndWhitespaceMessagesCannotSend() {
@@ -115,5 +132,19 @@ final class GhostGPTUITests: XCTestCase {
         ), evaluatedWith: status)
         wait(for: [rejected], timeout: 10)
         XCTAssertFalse(app.buttons["Run reviewed command"].isEnabled)
+    }
+
+    func testFailedBrowserPageShowsRecoveryInsteadOfBlankScreen() {
+        launch()
+        selectTab("Browser")
+        let address = app.textFields["ghost.browser.address"]
+        XCTAssertTrue(address.waitForExistence(timeout: 10))
+        address.tap()
+        let current = address.value as? String ?? ""
+        address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count)
+            + "https://ghostgpt-offline.invalid\n")
+        XCTAssertTrue(app.staticTexts["ghost.browser.error"].waitForExistence(timeout: 45))
+        XCTAssertTrue(app.buttons["Retry page"].exists)
+        XCTAssertTrue(app.textFields["ghost.browser.address"].exists)
     }
 }

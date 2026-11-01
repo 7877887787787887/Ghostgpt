@@ -48,6 +48,9 @@ class FakeHandler:
     def handle_ssh(self, payload):
         return gateway.Handler.handle_ssh(self, payload)
 
+    def handle_workspace(self):
+        return gateway.Handler.handle_workspace(self)
+
     def proxy_to_lmstudio(self):
         return gateway.Handler.proxy_to_lmstudio(self)
 
@@ -465,11 +468,28 @@ class GatewayAuthenticationTests(unittest.TestCase):
         self.assertIn('components.scheme?.lowercased() == "https"', source)
         self.assertIn('Provider changed. Scan the new provider', source)
 
-    def test_public_model_endpoint_uses_default_https_port_and_migrates_saved_values(self):
+    def test_native_model_and_terminal_endpoints_use_current_tailscale_gateway(self):
         source = (ROOT / "ios-native" / "SceneDelegate.swift").read_text(encoding="utf-8")
         self.assertIn('savedEndpoint == "https://msi.tail28f016.ts.net:8443/model"', source)
-        self.assertIn('defaults.set("https://msi.tail28f016.ts.net/model", forKey: "localModelEndpoint")', source)
-        self.assertIn('@AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net/model"', source)
+        self.assertIn('defaults.set("https://msi.tail28f016.ts.net:10003", forKey: "localModelEndpoint")', source)
+        self.assertIn('@AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net:10003"', source)
+        self.assertIn('defaults.set("https://msi.tail28f016.ts.net:10003/terminal", forKey: "terminalGatewayURL")', source)
+        self.assertIn('@AppStorage("terminalGatewayURL") private var terminalGatewayURL = "https://msi.tail28f016.ts.net:10003/terminal"', source)
+
+    def test_fast_mode_reduces_model_work_across_providers(self):
+        source = (ROOT / "ios-native" / "SceneDelegate.swift").read_text(encoding="utf-8")
+        self.assertIn('selectedSpeed == "Fast" ? min(maxTokens, 512)', source)
+        self.assertIn('selectedSpeed != "Fast" && reasoningLevel >= 2', source)
+        self.assertIn('if selectedSpeed != "Fast", reasoningLevel > 0', source)
+        self.assertIn('maxTokens: fastMode ? min(tokenLimit, 512) : tokenLimit', source)
+        self.assertIn('reasoningLevel: fastMode ? 0 : Int(reasoningLevel)', source)
+        self.assertIn('var remainingCharacters = responseSpeedMode == "Fast" ? 6000 : 12000', source)
+        self.assertIn('for message in messages.suffix(12).reversed()', source)
+        self.assertIn('defaults.set("Fast", forKey: "responseSpeedMode")', source)
+        self.assertIn('defaults.set(1, forKey: "nativeFastProfileVersion")', source)
+        self.assertIn('timeout: fastMode ? min(modelRequestTimeout, 45) : modelRequestTimeout', source)
+        automation = (ROOT / "ios-native" / "NativeAutomation.swift").read_text(encoding="utf-8")
+        self.assertIn('timeout: configuration.timeout', automation)
     def test_agent_uses_actual_command_result_and_requires_gateway_token(self):
         source = (ROOT / "ios-native" / "SceneDelegate.swift").read_text(encoding="utf-8")
         self.assertIn('let commandOK = resultObject?["ok"] as? Bool == true', source)
