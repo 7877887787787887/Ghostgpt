@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Private loopback gateway for GhostGPT -> LM Studio on this Windows PC."""
 from __future__ import annotations
-import getpass, hashlib, hmac, http.client, json, logging, os, secrets, shutil, subprocess, threading, time
+import getpass, hashlib, hmac, http.client, json, logging, os, secrets, shlex, shutil, subprocess, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -69,6 +69,33 @@ def allowed_powershell_hosts():
 def command_is_risky(command):
     lowered = command.casefold()
     return any(marker in lowered for marker in RISKY_COMMAND_MARKERS)
+
+def readonly_ssh_command(command):
+    """Return a shell-quoted diagnostic command, or reject executable syntax.
+
+    SSH passes a single command string to the remote shell even with shell=False
+    locally. Never forward the caller's unquoted command string.
+    """
+    if not isinstance(command, str) or not command.strip() or len(command) > 4000:
+        raise ValueError("SSH command is empty or exceeds the 4000-character limit.")
+    if any(ord(c) < 32 or ord(c) == 127 for c in command) or any(c in command for c in ";|&`<>$"):
+        raise ValueError("Shell operators, substitutions, and control characters are blocked for SSH.")
+    parts = shlex.split(command, posix=True)
+    allowed = {"date", "df", "free", "hostname", "id", "ip", "ls", "nproc", "ps", "pwd", "ss", "uname", "uptime", "whoami"}
+    if not parts or parts[0] not in allowed:
+        raise ValueError("SSH command is not on the read-only allow-list.")
+    args = parts[1:]
+    if parts[0] == "date" and any(not (a.startswith("+") or a in {"-u", "--utc", "--universal", "-R", "--rfc-email", "-I", "--iso-8601", "--help", "--version"} or a.startswith(("--iso-8601=", "--rfc-3339="))) for a in args):
+        raise ValueError("Only date display flags and output formats are allowed.")
+    if parts[0] == "hostname" and any(a not in {"-s", "--short", "-f", "--fqdn", "--long", "-d", "--domain", "-i", "--ip-address", "-I", "--all-ip-addresses", "-a", "--alias", "-A", "--all-fqdns", "--help", "--version"} for a in args):
+        raise ValueError("Changing hostname is not allowed.")
+    if parts[0] == "ss" and any(not (a in {"--tcp", "--udp", "--listening", "--numeric", "--processes", "--all", "--summary", "--extended", "--info", "--options", "--memory", "--ipv4", "--ipv6", "--unix", "--help", "--version"} or (a.startswith("-") and not a.startswith("--") and len(a) > 1 and all(c in "tulnparseiom46x" for c in a[1:]))) for a in args):
+        raise ValueError("Only socket display flags are allowed.")
+    if parts[0] == "ip":
+        words = [a for a in args if a not in {"-4", "-6", "-br", "-brief", "-s", "-stats", "-statistics", "-o", "-oneline"}]
+        if not words or words[0] not in {"a", "addr", "address", "l", "link", "r", "route"} or (len(words) > 1 and words[1] not in {"show", "list", "ls"}):
+            raise ValueError("Only IP address, link, and route display is allowed.")
+    return shlex.join(parts), parts[0]
 
 def load_gateway_token():
     token = os.environ.get("GHOSTGPT_GATEWAY_TOKEN", "").strip()
@@ -313,18 +340,10 @@ class Handler(BaseHTTPRequestHandler):
         if not command or len(command) > 4000:
             self.send_json(400, {"error": "SSH command is empty or exceeds the 4000-character limit."})
             return
-        if any(marker in command for marker in (";", "|", "\\n", "\\r", "&&", "||", "`", "<", ">", "$(", "${")):
-            self.send_json(403, {"error": "Compound commands, pipelines, substitutions, and redirection are blocked for SSH."})
-            return
         try:
-            import shlex
-            parts = shlex.split(command, posix=True)
-        except ValueError:
-            self.send_json(400, {"error": "Could not parse SSH command arguments."})
-            return
-        allowed_roots = {"date", "df", "free", "hostname", "id", "ip", "ls", "nproc", "ps", "pwd", "ss", "uname", "uptime", "whoami"}
-        if not parts or parts[0].split("/")[-1] not in allowed_roots:
-            self.send_json(403, {"error": "SSH command is not on the read-only allow-list."})
+            safe_command, root = readonly_ssh_command(command)
+        except ValueError as exc:
+            self.send_json(403, {"error": str(exc)})
             return
         ssh_executable = shutil.which("ssh.exe") or shutil.which("ssh")
         if not ssh_executable:
@@ -332,7 +351,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         target = f"{username}@{host}" if username else host
         try:
-            result = subprocess.run([ssh_executable, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes", target, command], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=25, shell=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            result = subprocess.run([ssh_executable, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes", target, safe_command], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=25, shell=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except subprocess.TimeoutExpired:
             self.send_json(504, {"error": "SSH command exceeded the 25-second execution limit."})
             return
@@ -342,7 +361,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         stdout, stderr = result.stdout or "", result.stderr or ""
         digest = hashlib.sha256(command.encode("utf-8")).hexdigest()[:16]
-        logging.info("SSH execution host=%s root=%s exit=%s command_sha256=%s", host, parts[0], result.returncode, digest)
+        logging.info("SSH execution host=%s root=%s exit=%s command_sha256=%s", host, root, result.returncode, digest)
         self.send_json(200, {"ok": result.returncode == 0, "exit_code": result.returncode, "stdout": stdout[:MAX_TERMINAL_OUTPUT_CHARS], "stderr": stderr[:MAX_TERMINAL_OUTPUT_CHARS], "truncated": len(stdout) > MAX_TERMINAL_OUTPUT_CHARS or len(stderr) > MAX_TERMINAL_OUTPUT_CHARS, "risk": "read-only"})
     def read_json_body(self, limit):
         raw_length = self.headers.get("Content-Length", "0") or "0"
@@ -401,6 +420,18 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "Command is empty or exceeds the 12000-character limit."})
             return
         lowered = command.casefold()
+        unquoted = lowered.replace("'", "").replace('"', "")
+        parameters = [p.lstrip("-").split(":", 1)[0] for p in unquoted.split()[1:] if p.startswith("-")]
+        remote_parameters = ("computername", "cimsession", "pssession", "session", "credential")
+        if "\\\\" in command or any(p == "cn" or (p and any(name.startswith(p) for name in remote_parameters)) for p in parameters):
+            self.send_json(403, {"error": "Remote sessions and UNC paths are not allowed in local PowerShell diagnostics."})
+            return
+        if any(marker in unquoted for marker in (".token", "pairing.code", "pairing.state", "public-model-pairing", "ghostgpt_gateway_token", "ghostgpt_gateway_token_file", ".ssh", "id_rsa", "id_ed25519", ".env", "login data", "keychain", "\\sam", "\\security")):
+            self.send_json(403, {"error": "Credential and gateway-secret paths are blocked in diagnostic commands."})
+            return
+        if lowered.split(None, 1)[0] == "get-content" and any(c in command for c in "*?["):
+            self.send_json(403, {"error": "Read a specific non-secret file; wildcard file reads are not allowed."})
+            return
         if any(marker in lowered for marker in BLOCKED_COMMAND_MARKERS):
             self.send_json(403, {"error": "Encoded, obfuscated, credential-oriented, and download/execute commands are blocked."})
             return
@@ -429,9 +460,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             result = subprocess.run(
                 [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-                 "$ErrorActionPreference = 'Stop';\n" + command],
+                 "$ErrorActionPreference = 'Stop';\n$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);\n" + command],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, timeout=60, shell=False,
+                text=True, encoding="utf-8", errors="replace", timeout=60, shell=False,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except subprocess.TimeoutExpired:
