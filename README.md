@@ -4,7 +4,7 @@ GhostGPT is a native SwiftUI iOS workspace with chat, a built-in browser, emoji 
 
 ## AI providers and model inventory
 
-GhostGPT supports three explicit providers: **Cloudflare Worker**, **Ollama on the Windows PC**, and **LM Studio on the Windows PC**. The provider selection is persisted, each provider has its own model ID, and switching does not silently fall back to a different provider. Cloudflare requests use the configured HTTPS Worker /chat route; its optional model inventory scan expects the Worker to expose /v1/models. If the Worker does not expose that route, set the model ID manually or add the inventory endpoint to the Worker.
+GhostGPT supports three explicit providers: **Cloudflare Worker**, and **LM Studio on the Windows PC**. The provider selection is persisted, each provider has its own model ID, and switching does not silently fall back to a different provider. Cloudflare requests use the configured HTTPS Worker /chat route; its optional model inventory scan expects the Worker to expose /v1/models. If the Worker does not expose that route, set the model ID manually or add the inventory endpoint to the Worker.
 
 Ollama uses the authenticated PC gateway GET /api/tags and POST /api/chat routes. The gateway only proxies those two Ollama paths to 127.0.0.1:11434; it does not expose Ollama's model-pull or administrative endpoints. LM Studio uses authenticated /control/start, /v1/models, and /v1/chat/completions routes. The app scans inventories and replaces a stale saved model ID only when that ID is no longer advertised.
 
