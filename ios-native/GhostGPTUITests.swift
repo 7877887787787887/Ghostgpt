@@ -27,7 +27,9 @@ final class GhostGPTUITests: XCTestCase {
             hierarchy.lifetime = .keepAlways
             add(hierarchy)
         }
-        app.terminate()
+        if app.state == .runningForeground || app.state == .runningBackground {
+            app.terminate()
+        }
     }
 
     private func launch() {
@@ -42,15 +44,12 @@ final class GhostGPTUITests: XCTestCase {
 
     private func selectTab(_ title: String) {
         let bottomTab = app.tabBars.buttons[title]
-        // iPhone Duo exposes the system side rail as ordinary buttons, not a
-        // TabBar. Match both the title and its icon identifier to distinguish
-        // the rail from similarly named links inside Settings or Tools.
-        let icons = ["Chat": "bubble.left.and.bubble.right.fill", "Browser": "globe",
-                     "Tools": "terminal", "Settings": "gearshape"]
-        guard let icon = icons[title] else { XCTFail("Unknown tab: \(title)"); return }
-        let tab = bottomTab.exists ? bottomTab : app.buttons.matching(
-            NSPredicate(format: "label == %@ AND identifier == %@", title, icon)
+        // iOS may expose TabView items as side-rail buttons rather than tab-bar buttons.
+        // Do not assume that the accessibility identifier is the SF Symbol name.
+        let sideRailTab = app.buttons.matching(
+            NSPredicate(format: "label == %@", title)
         ).firstMatch
+        let tab = bottomTab.exists ? bottomTab : sideRailTab
         XCTAssertTrue(tab.waitForExistence(timeout: 10), "Missing tab: \(title)")
         tab.tap()
     }
