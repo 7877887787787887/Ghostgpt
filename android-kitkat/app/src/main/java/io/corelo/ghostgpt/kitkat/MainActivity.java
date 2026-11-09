@@ -365,11 +365,26 @@ public final class MainActivity extends Activity {
             }).show();
     }
 
+    // Process.waitFor(timeout, TimeUnit) was added only in Android API 26.
+    private static boolean waitForOldAndroid(Process process, long timeoutMillis) throws InterruptedException {
+        long until = android.os.SystemClock.uptimeMillis() + timeoutMillis;
+        while (android.os.SystemClock.uptimeMillis() < until) {
+            try {
+                process.exitValue();
+                return true;
+            } catch (IllegalThreadStateException running) {
+                Thread.sleep(100);
+            }
+        }
+        try { process.exitValue(); return true; }
+        catch (IllegalThreadStateException running) { return false; }
+    }
+
     private static String commandRoot(String value) {
         Process process = null;
         try {
             process = new ProcessBuilder("su", "-c", value).redirectErrorStream(true).start();
-            if (!process.waitFor(15, TimeUnit.SECONDS)) {
+            if (!waitForOldAndroid(process, 15000)) {
                 process.destroy();
                 return "Timed out; root manager may need manual approval.";
             }
@@ -386,7 +401,7 @@ public final class MainActivity extends Activity {
         Process process = null;
         try {
             process = new ProcessBuilder(value).redirectErrorStream(true).start();
-            if (!process.waitFor(2, TimeUnit.SECONDS)) { process.destroy(); return "Timed out"; }
+            if (!waitForOldAndroid(process, 2000)) { process.destroy(); return "Timed out"; }
             if (process.exitValue() != 0) return "Unavailable";
             InputStream stream = process.getInputStream();
             try { return new String(readUpTo(stream, 256), "UTF-8").trim(); }
