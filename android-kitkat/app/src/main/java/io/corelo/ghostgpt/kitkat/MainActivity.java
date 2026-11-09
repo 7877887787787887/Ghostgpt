@@ -373,19 +373,20 @@ public final class MainActivity extends Activity {
                 });
             }
         }));
-        final CheckBox networkApproval = new CheckBox(this);
-        networkApproval.setText("I am on my own trusted private Wi-Fi and accept the risks of TCP ADB on port 5555.");
-        networkApproval.setTextColor(Color.WHITE);
-        networkApproval.setChecked(false);
-        add(page, networkApproval);
+        // The confirmation dialog itself records the user's informed approval.
+        // Keep one unambiguous confirmation step instead of a checkbox that can
+        // disappear off screen on smaller Android 4.4 tablet displays.
+        add(page, text("To enable ADB, tap the button below and confirm that this is your trusted, isolated private Wi-Fi. Your root manager must also grant GhostGPT su access.", 13));
         add(page, button("Enable wireless debugging (requires ROOT)", new Runnable() {
             @Override public void run() {
-                if (!networkApproval.isChecked()) {
-                    notice("Confirm you are on a trusted private Wi-Fi network.");
-                    return;
-                }
                 if (!isOnWifi() || !hasPrivateWifiAddress()) {
-                    notice("Connect to private Wi-Fi first. Wireless ADB was not enabled.");
+                    String detail = "Private Wi-Fi not detected. No ADB changes made.\n"
+                        + "Wi-Fi connected: " + (isOnWifi() ? "yes" : "no") + "\n"
+                        + "IP addresses:\n" + addresses()
+                        + "\nConnect to your own home Wi-Fi, then tap Check ADB service and private network.";
+                    wirelessHistory.setLength(0);
+                    wirelessHistory.append(detail);
+                    current.setText(detail);
                     return;
                 }
                 confirmWireless(true, current);
@@ -405,14 +406,18 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
             .setTitle(enable ? "Expose ADB on port 5555?" : "Disable network debugging?")
             .setMessage(enable
-                ? "Your device's existing root manager must grant UID 0. This will restart adbd in TCP mode, potentially exposing debugging to other devices on your Wi-Fi. Only continue on a trusted private network."
+                ? "I confirm that I am on my own trusted, isolated private Wi-Fi and accept the risk of exposing Android 4.4 ADB on TCP port 5555. This will restart adbd and requires your existing root manager to grant UID 0. Turn debugging off as soon as you finish."
                 : "This will restart adbd in USB mode and disconnect wireless debugging. Requires existing root access.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton(enable ? "Enable ADB TCP" : "Disable ADB TCP",
                 new android.content.DialogInterface.OnClickListener() {
                     @Override public void onClick(android.content.DialogInterface dialog, int which) {
                         if (enable && (!isOnWifi() || !hasPrivateWifiAddress())) {
-                            notice("Private Wi-Fi not detected; no changes made.");
+                            String detail = "Private Wi-Fi not detected. Wireless ADB remains unchanged.\nWi-Fi connected: "
+                                + (isOnWifi() ? "yes" : "no") + "\nIP addresses:\n" + addresses();
+                            wirelessHistory.setLength(0);
+                            wirelessHistory.append(detail);
+                            output.setText(detail);
                             return;
                         }
                         output.setText("Checking su permission and ADB state...");
