@@ -1,0 +1,58 @@
+name: Build GhostGPT Android APK
+on:
+  push:
+    branches: [main, "feature/android-ghostgpt-root-*"]
+    paths: ["android-ghostgpt/**", ".github/workflows/build-android-ghostgpt-apk.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["android-ghostgpt/**", ".github/workflows/build-android-ghostgpt-apk.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: ghostgpt-android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  android-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+          log-accepted-android-sdk-licenses: 'false'
+      - name: Install Android SDK 35
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+      - name: Build installable debug APK
+        run: gradle --no-daemon -p android-ghostgpt :app:assembleProductionDebug :app:assemblePreviewDebug
+      - name: Verify APK signature and contents
+        run: |
+          set -euo pipefail
+          for flavor in production preview; do
+            apk="android-ghostgpt/app/build/outputs/apk/$flavor/debug/app-$flavor-debug.apk"
+            test -s "$apk"
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+            "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" | grep -E "package:|sdkVersion:|targetSdkVersion:"
+            sha256sum "$apk" | awk '{print $1}' > "$apk.sha256"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GhostGPT-Android-0.3.0-production-and-preview
+          path: |
+            android-ghostgpt/app/build/outputs/apk/production/debug/*.apk
+            android-ghostgpt/app/build/outputs/apk/production/debug/*.sha256
+            android-ghostgpt/app/build/outputs/apk/preview/debug/*.apk
+            android-ghostgpt/app/build/outputs/apk/preview/debug/*.sha256
+          if-no-files-found: error
+          retention-days: 30
