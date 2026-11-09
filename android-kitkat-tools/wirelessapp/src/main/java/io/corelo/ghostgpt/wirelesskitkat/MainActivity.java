@@ -118,7 +118,9 @@ public final class MainActivity extends Activity {
 
     private String modify(boolean enable){
         String check=runCommand(new String[]{"su","-c","id -u"},12000);
-        if(!check.startsWith("0\n"))return "Root is not available. The tablet's existing su/SuperSU must authorize UID 0 first.\n"+check;
+        String[] identity=check.trim().split("\\r?\\n");
+        if(identity.length < 2 || !"0".equals(identity[0].trim()) || !"0".equals(identity[1].trim()))
+            return "Root is not available. The tablet's existing su/SuperSU must authorize UID 0 first.\n"+check;
         String command=enable?
             "setprop service.adb.tcp.port 5555; stop adbd; start adbd":
             "setprop service.adb.tcp.port -1; stop adbd; start adbd";
