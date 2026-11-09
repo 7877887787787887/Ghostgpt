@@ -38,6 +38,15 @@ The native chat can use Ollama's tool-call API to execute real, sequential termi
 
 Cloudflare and LM Studio remain supported for ordinary chat; this native tool-call loop currently requires Ollama.
 
+
+## Legacy jailbreak / root SSH tools
+
+The native iOS app includes an opt-in **Tools → Legacy jailbreak & root SSH** screen, also linked from Settings. It shows official Dopamine and palera1n resources for compatible older devices and can perform a manually approved, read-only `id -u` check through the existing authenticated private SSH gateway. A return value of UID 0 confirms only the **remote SSH session's identity**, not a jailbreak or root privileges for GhostGPT itself.
+
+GhostGPT does not bundle a jailbreak exploit, install jailbreak apps, or escape the iOS sandbox. Configure the separately jailbroken device, key-based OpenSSH, a verified host key, and `GHOSTGPT_SSH_HOSTS` on the Windows gateway before using this feature. The SSH gateway remains read-only and allow-listed.
+
+The legacy build configuration now targets **iOS 16.0+**; device support and build viability require CI and physical-device testing. Devices limited to iOS 15 or earlier are not covered by this build. See [legacy jailbreak setup](docs/legacy-jailbreak-ssh.md) for prerequisites and safety boundaries.
+
 ## Build an unsigned IPA
 
 The **Build native unsigned iOS IPA** GitHub Actions workflow runs on pushes to `main`. It compiles the native SwiftUI app for simulator and iOS device, packages an unsigned IPA, and uploads it as the `GhostGPT-native-unsigned-iOS-IPA` artifact.

@@ -391,6 +391,7 @@ struct ChatView: View {
     @State private var showingHistory = false
     @State private var activeTool: GhostTool?
     @State private var attemptedAutoStart = false
+    @State private var previousModelProvider = ""
     @State private var agentStatus = "GhostGPT is thinking…"
     @FocusState private var composerFocused: Bool
 
@@ -578,11 +579,14 @@ struct ChatView: View {
         .background(Color(uiColor: .systemBackground))
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
+            previousModelProvider = modelProvider
             guard modelProvider == ModelProvider.lmStudio.rawValue, autoStartPCModel, !attemptedAutoStart else { return }
             attemptedAutoStart = true
             Task { await startPCModelOnAppOpen() }
         }
-        .onChange(of: modelProvider) { oldValue, newValue in
+        .onChange(of: modelProvider) { newValue in
+            let oldValue = previousModelProvider.isEmpty ? newValue : previousModelProvider
+            previousModelProvider = newValue
             saveModel(localModelID, for: oldValue)
             localModelID = modelForProvider(newValue)
             attemptedAutoStart = false
@@ -591,7 +595,7 @@ struct ChatView: View {
                 Task { await startPCModelOnAppOpen() }
             }
         }
-        .onChange(of: localModelID) { _, value in saveModel(value, for: modelProvider) }
+        .onChange(of: localModelID) { value in saveModel(value, for: modelProvider) }
         .onChange(of: messages.count) { _ in persistCurrentChat() }
         .sheet(isPresented: $showingHistory) {
             ChatHistorySheet(
@@ -1334,6 +1338,124 @@ struct EmbeddedBrowser: UIViewRepresentable {
     }
 }
 
+// Legacy device integration intentionally does not attempt to jailbreak iOS.
+// It verifies the SSH identity of an independently jailbroken device through
+// the existing authenticated, private Windows gateway.
+struct LegacyJailbreakView: View {
+    @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
+    @AppStorage("legacyJailbreakSSHHost") private var sshHost = ""
+    @AppStorage("legacyJailbreakSSHUsername") private var sshUsername = "root"
+    @State private var status = "Not checked. An SSH identity check does not prove jailbreak compatibility."
+    @State private var checking = false
+    @State private var confirming = false
+
+    var body: some View {
+        Form {
+            Section("Current device") {
+                LabeledContent("Device", value: UIDevice.current.model)
+                LabeledContent("Operating system", value: "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)")
+                Text("A normal signed or sideloaded GhostGPT app cannot jailbreak iOS, escape the app sandbox, or grant itself root privileges.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("Jailbreak installers for eligible older devices") {
+                Link("Dopamine — official project", destination: URL(string: "https://github.com/opa334/Dopamine")!)
+                Link("palera1n — official project", destination: URL(string: "https://github.com/palera1n/palera1n")!)
+                Text("Compatibility depends on the exact model, chip, and iOS version. These open external projects; GhostGPT does not download or execute a jailbreak.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("Existing jailbroken device over private SSH") {
+                TextField("Trusted SSH host alias", text: $sshHost)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .accessibilityIdentifier("ghost.legacy.ssh.host")
+                TextField("SSH account (root or mobile)", text: $sshUsername)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button {
+                    confirming = true
+                } label: {
+                    Label(checking ? "Checking SSH identity…" : "Check remote SSH root identity", systemImage: "checkmark.shield")
+                }
+                .disabled(checking || sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("ghost.legacy.ssh.check")
+                Text(status).font(.footnote).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("ghost.legacy.ssh.status")
+                NavigationLink("Open SSH terminal") { TerminalGatewayView(mode: "ssh", initialHost: sshHost, initialUsername: sshUsername) }
+                NavigationLink("Configure authenticated gateway") { TerminalGatewaySettingsView() }
+                Text("The PC gateway must trust this host in GHOSTGPT_SSH_HOSTS and use verified host keys and SSH key authentication. The identity check runs only the read-only command id -u, after confirmation. Root (UID 0) is not proof of jailbreak status.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("Root access boundaries") {
+                Text("Jailbreak and OpenSSH installation must happen independently on the target device. Rootless jailbreaks do not make the system partition writable. This app never enables unrestricted root commands, disables the passcode, or exposes SSH publicly.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Legacy jailbreak tools")
+        .confirmationDialog("Check the selected SSH account's user ID?", isPresented: $confirming, titleVisibility: .visible) {
+            Button("Run read-only id -u") { Task { await checkRemoteIdentity() } }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("GhostGPT will ask your configured private gateway to run id -u on \(sshHost). No jailbreak or system modification will be performed.")
+        }
+    }
+
+    @MainActor
+    private func checkRemoteIdentity() async {
+        let alias = sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        let account = sshUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !alias.isEmpty, alias.count <= 253,
+              alias.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }),
+              account.count <= 64,
+              account.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }) else {
+            status = "Use a simple trusted SSH host alias and account name. No command was run."
+            return
+        }
+        guard let url = URL(string: gatewayURL), url.scheme == "https",
+              url.host != nil, url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil else {
+            status = "Configure a private HTTPS terminal gateway in Settings. No command was run."
+            return
+        }
+        let token = KeychainStore.migratedValue(for: "terminalGatewayToken")
+        guard !token.isEmpty else {
+            status = "No terminal gateway token is configured. No command was run."
+            return
+        }
+        checking = true
+        defer { checking = false }
+        do {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 35
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "mode": "ssh", "host": alias, "username": account,
+                "command": "id -u", "approved": true, "riskConfirmed": false
+            ])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard (200..<300).contains(http.statusCode),
+                  let reply = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  reply["ok"] as? Bool == true,
+                  reply["exit_code"] as? Int == 0,
+                  let uidText = reply["stdout"] as? String else {
+                status = "SSH check failed (HTTP \(http.statusCode)). Confirm the gateway token, SSH host allow-list, key authorization, and host-key trust."
+                return
+            }
+            let uid = uidText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if uid == "0" {
+                status = "SSH account reports UID 0 (root). Jailbreak state and writable filesystem access are not independently verified."
+            } else if !uid.isEmpty && uid.allSatisfy({ $0.isNumber }) {
+                status = "SSH account reports UID \(uid), not root. No privileges were changed."
+            } else {
+                status = "SSH completed but returned an unexpected UID. No privileges were changed."
+            }
+        } catch {
+            status = "SSH identity check failed: \(error.localizedDescription). No privileges were changed."
+        }
+    }
+}
+
 struct ToolsView: View {
     var body: some View {
         List {
@@ -1344,6 +1466,7 @@ struct ToolsView: View {
                 NavigationLink { BrowserView() } label: { Label("Ghost Browser", systemImage: "globe") }
                 NavigationLink { TerminalGatewayView(mode: "powershell") } label: { Label("PowerShell terminal", systemImage: "terminal") }
                 NavigationLink { TerminalGatewayView(mode: "ssh") } label: { Label("Linux sandbox / SSH", systemImage: "server.rack") }
+                NavigationLink { LegacyJailbreakView() } label: { Label("Legacy jailbreak & root SSH", systemImage: "lock.shield") }
                 NavigationLink { PluginsView() } label: { Label("Plugins & capabilities", systemImage: "puzzlepiece.extension") }
             }
             Section("Execution requirements") {
@@ -1394,6 +1517,8 @@ struct PluginsView: View {
 
 struct TerminalGatewayView: View {
     let mode: String
+    var initialHost: String = ""
+    var initialUsername: String = ""
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net/model"
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
@@ -1481,7 +1606,8 @@ struct TerminalGatewayView: View {
         }.padding()
             .navigationTitle(mode == "ssh" ? "SSH" : "PowerShell")
             .onAppear {
-                if host.isEmpty { host = mode == "ssh" ? "Ghost" : "msi" }
+                if host.isEmpty { host = mode == "ssh" ? (initialHost.isEmpty ? "Ghost" : initialHost) : "msi" }
+                if username.isEmpty && mode == "ssh" { username = initialUsername }
                 if gatewayStatus == "Not checked yet." && !gatewayURL.isEmpty {
                     Task { await checkGatewayConnection() }
                 }
@@ -1916,6 +2042,7 @@ struct SettingsView: View {
                 NavigationLink("Plugins & capabilities") { PluginsView() }
                 NavigationLink("AI models and local model scan") { LocalModelsSettingsView() }
                 NavigationLink("Terminal gateway (PowerShell / Linux SSH)") { TerminalGatewaySettingsView() }
+                NavigationLink("Legacy jailbreak / root SSH") { LegacyJailbreakView() }
                 NavigationLink("MCP connectors") { MCPConnectorView() }
                 NavigationLink("Browser") { BrowserView() }
             }
@@ -1988,7 +2115,7 @@ struct PCModelServerSettingsView: View {
         }
         .navigationTitle("PC model server")
         .onAppear { Task { await refreshStatus() } }
-        .onChange(of: localModelAPIKey) { _, value in _ = KeychainStore.save(value, for: "localModelAPIKey") }
+        .onChange(of: localModelAPIKey) { value in _ = KeychainStore.save(value, for: "localModelAPIKey") }
     }
 
     private func pairWithPC() async {
@@ -2102,6 +2229,7 @@ struct LocalModelsSettingsView: View {
     @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
     @AppStorage("lmStudioModelID") private var lmStudioModelID = "meta-llama-3.1-8b-instruct"
     @State private var providerAPIKey = ""
+    @State private var previousModelProvider = ""
     @State private var availableModels: [String] = []
     @State private var status = "Model inventory has not been checked."
     @State private var loading = false
@@ -2206,16 +2334,21 @@ struct LocalModelsSettingsView: View {
             }
         }
         .navigationTitle("AI models")
-        .onAppear { providerAPIKey = KeychainStore.migratedValue(for: provider.keychainAccount) }
-        .onChange(of: modelProvider) { oldValue, newValue in
+        .onAppear {
+            previousModelProvider = modelProvider
+            providerAPIKey = KeychainStore.migratedValue(for: provider.keychainAccount)
+        }
+        .onChange(of: modelProvider) { newValue in
+            let oldValue = previousModelProvider.isEmpty ? newValue : previousModelProvider
+            previousModelProvider = newValue
             saveModel(localModelID, for: oldValue)
             localModelID = modelForProvider(newValue)
             providerAPIKey = KeychainStore.migratedValue(for: (ModelProvider(rawValue: newValue) ?? .lmStudio).keychainAccount)
             availableModels = []
             status = "Provider changed. Scan the new provider before relying on its model inventory."
         }
-        .onChange(of: providerAPIKey) { _, value in _ = KeychainStore.save(value, for: provider.keychainAccount) }
-        .onChange(of: localModelID) { _, value in saveModel(value, for: modelProvider) }
+        .onChange(of: providerAPIKey) { value in _ = KeychainStore.save(value, for: provider.keychainAccount) }
+        .onChange(of: localModelID) { value in saveModel(value, for: modelProvider) }
     }
 
     private func modelForProvider(_ name: String) -> String {
