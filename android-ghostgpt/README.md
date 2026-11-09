@@ -1,6 +1,6 @@
 # GhostGPT Android — native APK with local root tools
 
-This is a **separate native Android client** in the GhostGPT repository, not a conversion of the SwiftUI iOS code or an iPhone IPA. The debug APK targets Android API 26+ (Android 8.0+).
+This is a **separate native Android client** in the GhostGPT repository, not a conversion of the SwiftUI iOS code or an iPhone IPA. The Android 0.3 app targets API 26+ (Android 8.0+). CI produces separate **production** and **preview** debug APKs.
 
 ## Features
 - Chat with your own HTTPS OpenAI-compatible model API, including GhostGPT's authenticated LM Studio gateway (`https://msi.tail28f016.ts.net/model`) and a configurable model ID.
@@ -14,9 +14,9 @@ This is a **separate native Android client** in the GhostGPT repository, not a c
 ## Build
 Run the **Build GhostGPT Android APK** GitHub Actions workflow from this branch, or use Android Studio and JDK 17:
 ```sh
-gradle -p android-ghostgpt :app:assembleDebug
+gradle -p android-ghostgpt :app:assembleProductionDebug :app:assemblePreviewDebug
 ```
-Artifacts are in `android-ghostgpt/app/build/outputs/apk/debug/app-debug.apk`. This is an installable **debug-signed** APK for testing, not a release-signed production app. For release updates, use a persistent signing key; debug builds should not be distributed as verified releases.
+The build creates `android-ghostgpt/app/build/outputs/apk/production/debug/app-production-debug.apk` and `android-ghostgpt/app/build/outputs/apk/preview/debug/app-preview-debug.apk`. Both are initially CI debug-signed APKs. **Preview** has a separate package ID (`io.corelo.ghostgpt.android.preview`), so it can be installed beside an older `io.corelo.ghostgpt.android` installation without removing its data. It is not an in-place update. For persistent production updates, sign production builds with the *same user-controlled key* each time, stored securely outside GitHub.
 
 ## Setup
 1. Install the APK on Android 8.0 or later. It can run unrooted, but root tools will not work unless a root solution is **already** installed and grants this app `su` permission.
@@ -39,3 +39,11 @@ On Android 11+, open **Debug → Open Wireless debugging / pairing**, then pair 
 On Android 8–10, including legacy Fire TV builds, standard Android 11 wireless pairing is unavailable; using `adb tcpip 5555` from a previously authorized computer can expose a TCP debugging interface to the network. Only use it on a trusted isolated network; disable it when finished. GhostGPT does not enable this network port on its own.
 
 **Android permissions are enforced:** ordinary apps cannot silently turn on USB debugging, modify developer options, defeat a locked bootloader, unlock another device, or obtain root. Some Fire TV firmwares hide or replace Android developer options pages; the app falls back to the device's available Settings menu.
+
+## USB and update-signing workflow
+
+The MSI PC stores an independent persistent signing key for USB distribution. The plain Android debug artifact created on ephemeral GitHub runners will not necessarily update a previous debug installation. Never remove an existing installation or its data automatically to bypass `INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
+
+To test safely alongside an older app, install the **preview** APK (`io.corelo.ghostgpt.android.preview`). The **production** APK remains the canonical package (`io.corelo.ghostgpt.android`) and should be signed consistently by the trusted MSI signing process before copying to the USB. Only the latest APK needs to be visible at the root of the USB; older releases can stay in its hidden `APKs` folder.
+
+Browser navigation only allows HTTPS, rejects credentials embedded in URLs, blocks mixed content and disables third-party cookies. The WebView is destroyed when its tab closes to avoid leaking memory and keeping hidden pages active.
