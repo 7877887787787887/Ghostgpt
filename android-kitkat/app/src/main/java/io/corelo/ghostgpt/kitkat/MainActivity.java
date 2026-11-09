@@ -14,6 +14,9 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
 import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
+import android.widget.CheckBox;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -60,6 +63,7 @@ public final class MainActivity extends Activity {
     private final StringBuilder chatHistory = new StringBuilder("GhostGPT KitKat — Android 4.4.4 compatibility build.");
     private final StringBuilder debugHistory = new StringBuilder("Tap Check tablet to inspect configuration.");
     private final StringBuilder rootHistory = new StringBuilder("No privileged command has been executed.");
+    private final StringBuilder wirelessHistory = new StringBuilder("Wireless ADB has not been changed.");
     private EditText chatInput;
 
     @Override public void onCreate(Bundle savedInstanceState) {
@@ -115,7 +119,7 @@ public final class MainActivity extends Activity {
         add(root, text("GHOSTGPT  •  KITKAT 4.4", 22));
         LinearLayout navigation = new LinearLayout(this);
         navigation.setOrientation(LinearLayout.HORIZONTAL);
-        for (final String name: new String[]{"Chat", "Browser", "Debug", "Root"}) {
+        for (final String name: new String[]{"Chat", "Browser", "Debug", "Root", "Wireless"}) {
             Button tab = button(name, new Runnable() {
                 @Override public void run() { active = name; render(); }
             });
@@ -133,6 +137,7 @@ public final class MainActivity extends Activity {
         if ("Browser".equals(active)) buildBrowser(page);
         if ("Debug".equals(active)) buildDebug(page);
         if ("Root".equals(active)) buildRoot(page);
+        if ("Wireless".equals(active)) buildWireless(page);
     }
 
     private void buildChat(final LinearLayout page) {
@@ -317,28 +322,154 @@ public final class MainActivity extends Activity {
     }
 
     private void buildRoot(final LinearLayout page) {
-        add(page, text("Root diagnostics", 20));
+        add(page, text("Root tools — existing su access", 20));
         add(page, text("This APK cannot jailbreak/root the tablet. 'su' works only if a root solution is already installed and the tablet grants permission. Every command requires approval.", 13));
         final TextView result = text(rootHistory.toString(), 13);
         add(page, result);
         add(page, button("Check root UID", new Runnable() {
             @Override public void run() { confirmRoot("id -u", result, false); }
         }));
-        for (final String diagnostic: new String[]{"id", "getenforce", "df -h", "getprop ro.build.version.release"}) {
+        for (final String diagnostic: new String[]{"id", "getenforce", "df -h", "getprop ro.build.version.release", "getprop ro.build.display.id", "mount", "cat /proc/meminfo", "getprop service.adb.tcp.port"}) {
             add(page, button("Read-only: " + diagnostic, new Runnable() {
                 @Override public void run() { confirmRoot(diagnostic, result, false); }
             }));
         }
-        final EditText manual = input("Advanced manual root command (1–250 chars)", "");
+        add(page, button("Open my installed root manager (SuperSU or compatible)", new Runnable() {
+            @Override public void run() { openRootManager(); }
+        }));
+        add(page, text("Your own root-permission app must grant GhostGPT access to su. If 'su' is missing or denied, these commands cannot become root by themselves.", 13));
+        final EditText manual = input("Advanced manual root command (1–500 chars)", "");
         add(page, manual);
         add(page, button("Review manual root command", new Runnable() {
             @Override public void run() {
                 String value = manual.getText().toString().trim();
-                if (value.length() == 0 || value.length() > 250) { notice("Enter 1–250 characters."); return; }
+                if (value.length() == 0 || value.length() > 500) { notice("Enter 1–500 characters."); return; }
                 confirmRoot(value, result, true);
             }
         }));
         add(page, text("Root commands can erase data or damage old firmware. Never run unreviewed commands. AI responses do not invoke root.", 13));
+    }
+
+    private void buildWireless(final LinearLayout page) {
+        add(page, text("Wireless debugging / ADB TCP", 20));
+        add(page, text("Android 4.4 has no Android 11+ wireless pairing. This device's legacy ADB TCP service may accept remote debugging from your local network. Only enable it on trusted, isolated Wi-Fi; disable it when finished.", 13));
+        final TextView current = text(wirelessHistory.toString(), 13);
+        add(page, current);
+        add(page, button("Check ADB service and private network", new Runnable() {
+            @Override public void run() {
+                worker.execute(new Runnable() {
+                    @Override public void run() {
+                        final String value = RootController.status()
+                            + "\nWi-Fi connected: " + (isOnWifi() ? "yes" : "no")
+                            + "\nIP address:\n" + addresses();
+                        ui.post(new Runnable() {
+                            @Override public void run() {
+                                wirelessHistory.setLength(0);
+                                wirelessHistory.append(value);
+                                current.setText(wirelessHistory.toString());
+                            }
+                        });
+                    }
+                });
+            }
+        }));
+        final CheckBox networkApproval = new CheckBox(this);
+        networkApproval.setText("I am on my own trusted private Wi-Fi and accept the risks of TCP ADB on port 5555.");
+        networkApproval.setTextColor(Color.WHITE);
+        networkApproval.setChecked(false);
+        add(page, networkApproval);
+        add(page, button("Enable wireless debugging (requires ROOT)", new Runnable() {
+            @Override public void run() {
+                if (!networkApproval.isChecked()) {
+                    notice("Confirm you are on a trusted private Wi-Fi network.");
+                    return;
+                }
+                if (!isOnWifi() || !hasPrivateWifiAddress()) {
+                    notice("Connect to private Wi-Fi first. Wireless ADB was not enabled.");
+                    return;
+                }
+                confirmWireless(true, current);
+            }
+        }));
+        add(page, button("Disable wireless debugging (ROOT)", new Runnable() {
+            @Override public void run() { confirmWireless(false, current); }
+        }));
+        add(page, button("Open Developer options", new Runnable() {
+            @Override public void run() { openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS); }
+        }));
+        add(page, text("If the root app cannot grant SU access, connect an authorized computer by a data-capable USB cable. Approve USB debugging on the tablet, then run 'adb tcpip 5555' on the computer. This does not bypass Android authorization.", 13));
+        add(page, text("Wireless ADB does not survive reboot. It is not a secure encrypted tunnel; never forward TCP 5555 to the internet. The AI chat cannot trigger these controls.", 13));
+    }
+
+    private void confirmWireless(final boolean enable, final TextView output) {
+        new AlertDialog.Builder(this)
+            .setTitle(enable ? "Expose ADB on port 5555?" : "Disable network debugging?")
+            .setMessage(enable
+                ? "Your device's existing root manager must grant UID 0. This will restart adbd in TCP mode, potentially exposing debugging to other devices on your Wi-Fi. Only continue on a trusted private network."
+                : "This will restart adbd in USB mode and disconnect wireless debugging. Requires existing root access.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton(enable ? "Enable ADB TCP" : "Disable ADB TCP",
+                new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface dialog, int which) {
+                        if (enable && (!isOnWifi() || !hasPrivateWifiAddress())) {
+                            notice("Private Wi-Fi not detected; no changes made.");
+                            return;
+                        }
+                        output.setText("Checking su permission and ADB state...");
+                        worker.execute(new Runnable() {
+                            @Override public void run() {
+                                final String result = RootController.setWirelessAdb(enable);
+                                ui.post(new Runnable() {
+                                    @Override public void run() {
+                                        wirelessHistory.setLength(0);
+                                        wirelessHistory.append(result);
+                                        output.setText(wirelessHistory.toString());
+                                    }
+                                });
+                            }
+                        });
+                    }
+                }).show();
+    }
+
+    private boolean isOnWifi() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            NetworkInfo info = cm == null ? null : cm.getActiveNetworkInfo();
+            return info != null && info.isConnected() && info.getType() == ConnectivityManager.TYPE_WIFI;
+        } catch (Exception error) { return false; }
+    }
+
+    private boolean hasPrivateWifiAddress() {
+        try {
+            for (NetworkInterface nic: Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (!nic.isUp() || nic.isLoopback()) continue;
+                String name = nic.getName().toLowerCase(java.util.Locale.US);
+                if (!name.startsWith("wlan") && !name.startsWith("wifi")) continue;
+                for (InetAddress ip: Collections.list(nic.getInetAddresses())) {
+                    if (!(ip instanceof Inet4Address)) continue;
+                    byte[] value = ip.getAddress();
+                    int first = value[0] & 255;
+                    int second = value[1] & 255;
+                    if (first == 10 || first == 192 && second == 168 ||
+                        first == 172 && second >= 16 && second <= 31) return true;
+                }
+            }
+        } catch (Exception ignored) { }
+        return false;
+    }
+
+    private void openRootManager() {
+        String[] managers = new String[]{
+            "eu.chainfire.supersu", "com.noshufou.android.su", "com.topjohnwu.magisk"
+        };
+        for (String name: managers) {
+            try {
+                Intent launch = getPackageManager().getLaunchIntentForPackage(name);
+                if (launch != null) { startActivity(launch); return; }
+            } catch (Exception ignored) { }
+        }
+        notice("No known root manager found. Open the app that grants root permissions manually.");
     }
 
     private void confirmRoot(final String command, final TextView result, final boolean risky) {
@@ -381,20 +512,10 @@ public final class MainActivity extends Activity {
     }
 
     private static String commandRoot(String value) {
-        Process process = null;
-        try {
-            process = new ProcessBuilder("su", "-c", value).redirectErrorStream(true).start();
-            if (!waitForOldAndroid(process, 15000)) {
-                process.destroy();
-                return "Timed out; root manager may need manual approval.";
-            }
-            InputStream stdout = process.getInputStream();
-            try {
-                byte[] data = readUpTo(stdout, 8192);
-                return "Exit " + process.exitValue() + ":\n" + new String(data, "UTF-8");
-            } finally { stdout.close(); }
-        } catch (Exception error) { return "Root access unavailable: " + error.getMessage(); }
-        finally { if (process != null) process.destroy(); }
+        RootController.Result result = RootController.run(value, 18000);
+        return result.describe()
+            + ("id -u".equals(value) && RootController.hasRoot(result)
+                ? "\nROOT CONFIRMED: GhostGPT was granted UID 0 by your existing root app." : "");
     }
 
     private static String command(String... value) {
