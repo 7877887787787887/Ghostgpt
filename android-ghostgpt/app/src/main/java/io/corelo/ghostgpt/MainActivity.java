@@ -202,7 +202,8 @@ public final class MainActivity extends Activity {
         contents.addView(messages, new LinearLayout.LayoutParams(-1, 0, 1));
         EditText input = field("Ask GhostGPT anything...", "");
         add(contents, input, 12);
-        Button send = action("Send to AI model", true, () -> {
+        final Button[] sendButton = new Button[1];
+        sendButton[0] = action("Send to AI model", true, () -> {
             String prompt = input.getText().toString().trim();
             if (prompt.isEmpty()) return;
             String token = SecretStore.load(this, "modelToken");
@@ -212,7 +213,7 @@ public final class MainActivity extends Activity {
             chatLog.append("\n\nYOU  ·  ").append(prompt).append("\n\nGHOSTGPT  ·  Processing…");
             transcript.setText(chatLog.toString());
             messages.post(() -> messages.fullScroll(View.FOCUS_DOWN));
-            send.setEnabled(false);
+            sendButton[0].setEnabled(false);
             List<JSONObject> request = new ArrayList<>(chatHistory);
             try {
                 JSONObject user = new JSONObject();
@@ -250,11 +251,11 @@ public final class MainActivity extends Activity {
                     }
                     transcript.setText(chatLog.toString());
                     messages.post(() -> messages.fullScroll(View.FOCUS_DOWN));
-                    send.setEnabled(true);
+                    sendButton[0].setEnabled(true);
                 });
             });
         });
-        add(contents, send, 8);
+        add(contents, sendButton[0], 8);
         body.addView(contents);
     }
 
