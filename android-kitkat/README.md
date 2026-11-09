@@ -7,8 +7,8 @@ A separate, lightweight native Android app for the **MW22-A32 tablet** photograp
 - **Private model chat:** HTTPS OpenAI-compatible `/v1/chat/completions` requests; model URL, model ID, and a bearer token are entered in the app. The token is **never saved to disk** because Android 4.4 lacks modern secure Keystore encryption support. Android 4.4 often cannot negotiate modern TLS; the app fails closed rather than disabling certificate verification.
 - **Browser launcher:** Opens a selected HTTPS page using a separately installed browser. It does not embed an outdated Android 4.4 WebView for sensitive internet browsing.
 - **Developer diagnostics:** Android build and CPU, local IP, protected ADB state, and the published `service.adb.tcp.port` property. Shortcuts to Android Developer options, system settings, Wi-Fi, and Unknown sources.
-- **ADB instructions:** Guidance for enabling legacy TCP ADB **only after USB debugging was manually authorized on a trusted computer**. The app never enables ADB silently or opens a background server.
-- **Root diagnostics:** `su -c id -u`, read-only commands, and explicit single-command manual root approval. Root remains unavailable on unmodified devices; the app does not include exploits, unlock bootloaders, or automatically elevate itself.
+- **Wireless debugging controls integrated in GhostGPT:** The new **Wireless** tab reads legacy ADB status, verifies trusted private Wi-Fi and pre-existing `su` UID 0, and can enable/disable ADB TCP port 5555 after explicit user confirmation. On KitKat there is no modern wireless pairing. Without root, use an already-authorized USB ADB connection.
+- **Root tools integrated in GhostGPT:** Checks for a working `su`, UID 0, identity, filesystem mounts, memory, disk use, firmware properties, SELinux and ADB TCP status; also offers a root-manager shortcut and manually entered commands, each requiring confirmation. If your separate root app grants `su`, GhostGPT can use that permission. It does not install root exploits or bypass authorization.
 
 ## Build and installation
 
@@ -29,3 +29,9 @@ Chrome 81 was released in 2020 and does not receive security updates. Android 4.
 - Some newer HTTPS services, AI gateways, and websites cannot be used with KitKat's old certificate store/TLS stack, even with a properly installed app.
 - No Android 11+ Wi-Fi pairing, no automatic root, no exploit payloads, no hidden remote administration.
 - Hardware and browser compatibility require physical-tablet testing.
+
+## KitKat 0.2.0: integrated Root and Wireless tabs
+
+A pre-existing SuperSU or other compatible root manager must grant GhostGPT `su` authorization. Root tools never run from AI messages or on startup. **Wireless → Enable** requires both the user's trusted-private-Wi-Fi checkbox and an explicit confirmation; it verifies UID 0 before restarting Android's `adbd` on TCP port 5555. This exposes remote debugging to devices on the local network and should be disabled when finished. On Android 4.4 this is not Android 11-style wireless pairing. The separate APKs are not required to use these integrated features.
+
+The app package is still `io.corelo.ghostgpt.kitkat` and versionCode is 2. Sign updates using the existing persistent MSI signing key; never replace it with a new CI debug key when installing over the previous build.
