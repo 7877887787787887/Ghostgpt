@@ -10,7 +10,7 @@ Check the **exact device model, chip, and iOS version** with the maintainers bef
 - palera1n (official source): https://github.com/palera1n/palera1n
 - palera1n installation and A11 passcode cautions: https://docs.palera.in/installing-palera1n/
 
-Many older iPhones cannot run current iOS releases. GhostGPT currently builds with an **iOS 17.0 minimum deployment target**, so this in-app screen cannot run on an iPhone limited to iOS 16 or earlier. Do not claim otherwise. A separate build targeting older iOS with API compatibility testing is required.
+Many older iPhones cannot run current iOS releases. The legacy compatibility branch targets **iOS 16.0 or later** (pending Xcode CI verification), including supported devices that cannot upgrade to iOS 17. Devices limited to iOS 15 or earlier still require a separate, older-targeted build; this feature does not remove hardware restrictions.
 
 ## Setup on a device that you independently jailbroke
 
