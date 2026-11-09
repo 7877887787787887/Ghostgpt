@@ -77,13 +77,17 @@ class Handler(BaseHTTPRequestHandler):
             n=int(self.headers.get("Content-Length","0"))
             if n<0 or n>MAX_BODY: self.send_json(413,{"error":"Request too large"}); return
             raw=self.rfile.read(n) if n else b"{}"
+            if n and len(raw) != n:
+                self.send_json(400,{"error":"Incomplete request body"}); return
             data=json.loads(raw.decode("utf-8"))
         except Exception: self.send_json(400,{"error":"Invalid JSON"}); return
+        if not isinstance(data,dict):
+            self.send_json(400,{"error":"Request body must be a JSON object"}); return
         if path=="/pair":
-            if not redeem(str(data.get("code","")).strip().upper(),self.client_address[0]):
-                self.send_json(403,{"error":"Pairing code invalid, expired, already used, or rate-limited"}); return
             secret=token()
             if not secret: self.send_json(503,{"error":"Pairing is not configured"}); return
+            if not redeem(str(data.get("code","")).strip().upper(),self.client_address[0]):
+                self.send_json(403,{"error":"Pairing code invalid, expired, already used, or rate-limited"}); return
             logging.info("One-time model pairing redeemed; token value not logged")
             self.send_json(200,{"ok":True,"token":secret,"endpoint":"https://msi.tail28f016.ts.net/model"}); return
         if not self.authorized(): self.send_json(401,{"error":"Unauthorized"}); return
