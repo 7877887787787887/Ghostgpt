@@ -178,6 +178,11 @@ public final class MainActivity extends Activity {
 
     private void show(String item) {
         if (!item.equals(activeTab)) {
+            if (browser != null) {
+                browser.stopLoading();
+                browser.destroy();
+                browser = null;
+            }
             activeTab = item;
             renderShell();
             return;
@@ -273,8 +278,8 @@ public final class MainActivity extends Activity {
         controls.addView(address, new LinearLayout.LayoutParams(0, dp(45), 1));
         Button open = action("Go", true, () -> {
             String value = address.getText().toString().trim();
-            if (!value.startsWith("https://") && !value.startsWith("http://")) {
-                Toast.makeText(this, "Use a full HTTPS address", Toast.LENGTH_SHORT).show();
+            if (!validHttps(value)) {
+                Toast.makeText(this, "Only complete HTTPS URLs without embedded credentials are allowed.", Toast.LENGTH_LONG).show();
                 return;
             }
             preferences.edit().putString("browserUrl", value).apply();
@@ -298,7 +303,7 @@ public final class MainActivity extends Activity {
         browser.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String scheme = request.getUrl().getScheme();
-                return scheme == null || (!scheme.equalsIgnoreCase("https") && !scheme.equalsIgnoreCase("http"));
+                return scheme == null || !scheme.equalsIgnoreCase("https");
             }
         });
         contents.addView(browser, new LinearLayout.LayoutParams(-1, 0, 1));
