@@ -8,6 +8,10 @@ on:
     paths: ["android-ghostgpt/**", ".github/workflows/build-android-ghostgpt-apk.yml"]
   workflow_dispatch:
 
+concurrency:
+  group: ghostgpt-android-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
