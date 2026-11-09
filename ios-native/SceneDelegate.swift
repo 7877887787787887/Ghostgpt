@@ -391,6 +391,7 @@ struct ChatView: View {
     @State private var showingHistory = false
     @State private var activeTool: GhostTool?
     @State private var attemptedAutoStart = false
+    @State private var previousModelProvider = ""
     @State private var agentStatus = "GhostGPT is thinking…"
     @FocusState private var composerFocused: Bool
 
@@ -578,11 +579,14 @@ struct ChatView: View {
         .background(Color(uiColor: .systemBackground))
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
+            previousModelProvider = modelProvider
             guard modelProvider == ModelProvider.lmStudio.rawValue, autoStartPCModel, !attemptedAutoStart else { return }
             attemptedAutoStart = true
             Task { await startPCModelOnAppOpen() }
         }
-        .onChange(of: modelProvider) { oldValue, newValue in
+        .onChange(of: modelProvider) { newValue in
+            let oldValue = previousModelProvider.isEmpty ? newValue : previousModelProvider
+            previousModelProvider = newValue
             saveModel(localModelID, for: oldValue)
             localModelID = modelForProvider(newValue)
             attemptedAutoStart = false
@@ -591,7 +595,7 @@ struct ChatView: View {
                 Task { await startPCModelOnAppOpen() }
             }
         }
-        .onChange(of: localModelID) { _, value in saveModel(value, for: modelProvider) }
+        .onChange(of: localModelID) { value in saveModel(value, for: modelProvider) }
         .onChange(of: messages.count) { _ in persistCurrentChat() }
         .sheet(isPresented: $showingHistory) {
             ChatHistorySheet(
@@ -2111,7 +2115,7 @@ struct PCModelServerSettingsView: View {
         }
         .navigationTitle("PC model server")
         .onAppear { Task { await refreshStatus() } }
-        .onChange(of: localModelAPIKey) { _, value in _ = KeychainStore.save(value, for: "localModelAPIKey") }
+        .onChange(of: localModelAPIKey) { value in _ = KeychainStore.save(value, for: "localModelAPIKey") }
     }
 
     private func pairWithPC() async {
@@ -2225,6 +2229,7 @@ struct LocalModelsSettingsView: View {
     @AppStorage("ollamaModelID") private var ollamaModelID = "gps-qwen3-fast-8b:latest"
     @AppStorage("lmStudioModelID") private var lmStudioModelID = "meta-llama-3.1-8b-instruct"
     @State private var providerAPIKey = ""
+    @State private var previousModelProvider = ""
     @State private var availableModels: [String] = []
     @State private var status = "Model inventory has not been checked."
     @State private var loading = false
@@ -2329,16 +2334,21 @@ struct LocalModelsSettingsView: View {
             }
         }
         .navigationTitle("AI models")
-        .onAppear { providerAPIKey = KeychainStore.migratedValue(for: provider.keychainAccount) }
-        .onChange(of: modelProvider) { oldValue, newValue in
+        .onAppear {
+            previousModelProvider = modelProvider
+            providerAPIKey = KeychainStore.migratedValue(for: provider.keychainAccount)
+        }
+        .onChange(of: modelProvider) { newValue in
+            let oldValue = previousModelProvider.isEmpty ? newValue : previousModelProvider
+            previousModelProvider = newValue
             saveModel(localModelID, for: oldValue)
             localModelID = modelForProvider(newValue)
             providerAPIKey = KeychainStore.migratedValue(for: (ModelProvider(rawValue: newValue) ?? .lmStudio).keychainAccount)
             availableModels = []
             status = "Provider changed. Scan the new provider before relying on its model inventory."
         }
-        .onChange(of: providerAPIKey) { _, value in _ = KeychainStore.save(value, for: provider.keychainAccount) }
-        .onChange(of: localModelID) { _, value in saveModel(value, for: modelProvider) }
+        .onChange(of: providerAPIKey) { value in _ = KeychainStore.save(value, for: provider.keychainAccount) }
+        .onChange(of: localModelID) { value in saveModel(value, for: modelProvider) }
     }
 
     private func modelForProvider(_ name: String) -> String {
