@@ -1375,7 +1375,7 @@ struct LegacyJailbreakView: View {
                 Text(status).font(.footnote).foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .accessibilityIdentifier("ghost.legacy.ssh.status")
-                NavigationLink("Open SSH terminal") { TerminalGatewayView(mode: "ssh") }
+                NavigationLink("Open SSH terminal") { TerminalGatewayView(mode: "ssh", initialHost: sshHost, initialUsername: sshUsername) }
                 NavigationLink("Configure authenticated gateway") { TerminalGatewaySettingsView() }
                 Text("The PC gateway must trust this host in GHOSTGPT_SSH_HOSTS and use verified host keys and SSH key authentication. The identity check runs only the read-only command id -u, after confirmation. Root (UID 0) is not proof of jailbreak status.")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -1513,6 +1513,8 @@ struct PluginsView: View {
 
 struct TerminalGatewayView: View {
     let mode: String
+    var initialHost: String = ""
+    var initialUsername: String = ""
     @AppStorage("terminalGatewayURL") private var gatewayURL = "https://msi.tail28f016.ts.net:10000/terminal"
     @AppStorage("localModelEndpoint") private var localModelEndpoint = "https://msi.tail28f016.ts.net/model"
     @AppStorage("localModelID") private var localModelID = "meta-llama-3.1-8b-instruct"
@@ -1600,7 +1602,8 @@ struct TerminalGatewayView: View {
         }.padding()
             .navigationTitle(mode == "ssh" ? "SSH" : "PowerShell")
             .onAppear {
-                if host.isEmpty { host = mode == "ssh" ? "Ghost" : "msi" }
+                if host.isEmpty { host = mode == "ssh" ? (initialHost.isEmpty ? "Ghost" : initialHost) : "msi" }
+                if username.isEmpty && mode == "ssh" { username = initialUsername }
                 if gatewayStatus == "Not checked yet." && !gatewayURL.isEmpty {
                     Task { await checkGatewayConnection() }
                 }
