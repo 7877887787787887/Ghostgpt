@@ -3,6 +3,11 @@ package io.corelo.ghostgpt;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Intent;
+import android.net.Uri;
+import android.provider.Settings;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -160,7 +165,7 @@ public final class MainActivity extends Activity {
         layout.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout tabs = row();
         tabs.setPadding(dp(4), dp(6), dp(4), dp(8));
-        for (String item : new String[]{"Chat", "Browser", "Root", "SSH", "Settings"}) {
+        for (String item : new String[]{"Chat", "Browser", "Root", "Debug", "SSH", "Settings"}) {
             Button button = action(item, item.equals(activeTab), () -> show(item));
             button.setTextSize(11);
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(47), 1);
@@ -182,6 +187,7 @@ public final class MainActivity extends Activity {
             case "Chat": showChat(); break;
             case "Browser": showBrowser(); break;
             case "Root": showRoot(); break;
+            case "Debug": showDebug(); break;
             case "SSH": showSSH(); break;
             default: showSettings(); break;
         }
@@ -320,7 +326,11 @@ public final class MainActivity extends Activity {
                 {"Android version", "getprop ro.build.version.release"},
                 {"SELinux enforcement", "getenforce"},
                 {"Disk usage", "df -h"},
-                {"Running identity", "id"}
+                {"Running identity", "id"},
+                {"Build properties", "getprop ro.build.fingerprint"},
+                {"ADB TCP status", "getprop service.adb.tcp.port"},
+                {"Battery report", "dumpsys battery"},
+                {"Recent system logs", "logcat -d -t 80"}
         }) {
             add(contents, action(item[0], false,
                     () -> confirmRoot("Run read-only root diagnostic?", item[1], output)), 7);
@@ -393,6 +403,91 @@ public final class MainActivity extends Activity {
                 output.setText(rootLog.toString());
             });
         });
+    }
+
+    // Android reserves developer-settings writes for system/ADB-authorized callers.
+    // These controls only inspect status and open the official Settings screens.
+    private void showDebug() {
+        LinearLayout contents = column(15);
+        add(contents, label("Developer & wireless debugging", 19, WHITE, true), 0);
+        add(contents, label("Diagnostic tools for your own Android and Fire TV devices. This APK does not silently enable ADB, modify protected developer options, or exploit Android.", 12, MUTED, false), 5);
+
+        TextView report = label("Tap Refresh to inspect local debugging status.", 12, WHITE, false);
+        report.setTextIsSelectable(true);
+        report.setPadding(dp(12), dp(12), dp(12), dp(12));
+        report.setBackground(background(PANEL, BORDER));
+        add(contents, report, 12);
+        add(contents, action("Refresh device & ADB status", true, () -> {
+            report.setText("Reading device status…");
+            workers.execute(() -> {
+                String data = DeveloperTools.report(this);
+                ui.post(() -> report.setText(data));
+            });
+        }), 10);
+
+        add(contents, label("System developer controls", 15, WHITE, true), 18);
+        add(contents, action("Open Developer options", false,
+            () -> openSystemSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS, false)), 7);
+        add(contents, action("Open Wireless debugging / pairing", false, () -> {
+            if (android.os.Build.VERSION.SDK_INT < 30)
+                Toast.makeText(this, "Android 8–10: modern wireless ADB pairing is unsupported; see guidance below.", Toast.LENGTH_LONG).show();
+            openSystemSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS, false);
+        }), 7);
+        add(contents, action("Open Wi-Fi settings", false,
+            () -> openSystemSettings(Settings.ACTION_WIFI_SETTINGS, false)), 7);
+        add(contents, action("Open this app's system settings", false,
+            () -> openSystemSettings(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true)), 7);
+        add(contents, action("Open Install unknown apps permission", false,
+            () -> openSystemSettings(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, true)), 7);
+        add(contents, action("Open Accessibility settings", false,
+            () -> openSystemSettings(Settings.ACTION_ACCESSIBILITY_SETTINGS, false)), 7);
+
+        add(contents, label("Wireless ADB — authorized computer commands", 15, WHITE, true), 18);
+        String commands11 = "Android 11+ (approve pairing on the device):\n" +
+            "adb pair DEVICE_IP:PAIRING_PORT\n" +
+            "adb connect DEVICE_IP:DEBUG_PORT\n" +
+            "adb devices -l";
+        String commands9 = "Android 8–10 legacy ADB (authorized host only):\n" +
+            "adb devices -l\n" +
+            "adb tcpip 5555\n" +
+            "adb connect DEVICE_IP:5555\n" +
+            "adb shell getprop service.adb.tcp.port\n" +
+            "TCP debugging can expose ADB on the network. Restrict access and turn it off when finished.";
+        add(contents, label(android.os.Build.VERSION.SDK_INT >= 30 ? commands11 : commands9, 12, MUTED, false), 8);
+        add(contents, action("Copy ADB instructions", false, () -> {
+            String instructions = android.os.Build.VERSION.SDK_INT >= 30 ? commands11 : commands9;
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard != null) {
+                clipboard.setPrimaryClip(ClipData.newPlainText("ADB instructions", instructions));
+                Toast.makeText(this, "Copied ADB instructions", Toast.LENGTH_SHORT).show();
+            }
+        }), 8);
+
+        add(contents, label("Read-only remote troubleshooting", 15, WHITE, true), 18);
+        add(contents, label("On a computer that has already been authorized by your device, use: adb shell getprop ro.build.version.sdk; adb shell settings get global adb_enabled; adb shell dumpsys battery. Root is not needed for these basic checks.", 12, MUTED, false), 8);
+        add(contents, action("Copy basic ADB checks", false, () -> {
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("ADB checks",
+                "adb devices -l\nadb shell getprop ro.build.version.sdk\nadb shell settings get global adb_enabled\nadb shell dumpsys battery"));
+            Toast.makeText(this, "Copied diagnostic commands", Toast.LENGTH_SHORT).show();
+        }), 8);
+        add(contents, label("Developer settings depend on firmware. Fire TV may not expose every Android settings screen. The root controls remain under Root and always require approval.", 11, MUTED, false), 14);
+        body.addView(scroll(contents));
+    }
+
+    private void openSystemSettings(String action, boolean ownApplication) {
+        try {
+            Intent intent = new Intent(action);
+            if (ownApplication) intent.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+        } catch (Exception unsupported) {
+            Toast.makeText(this, "That settings screen is not exposed by this device. Opening standard Settings.", Toast.LENGTH_LONG).show();
+            try {
+                startActivity(new Intent(Settings.ACTION_SETTINGS));
+            } catch (Exception unavailable) {
+                Toast.makeText(this, "This firmware has no accessible settings activity.", Toast.LENGTH_LONG).show();
+            }
+        }
     }
 
     private void showSSH() {
