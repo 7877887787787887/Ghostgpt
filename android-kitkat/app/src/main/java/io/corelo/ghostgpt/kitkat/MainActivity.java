@@ -64,6 +64,8 @@ public final class MainActivity extends Activity {
     private final StringBuilder debugHistory = new StringBuilder("Tap Check tablet to inspect configuration.");
     private final StringBuilder rootHistory = new StringBuilder("No privileged command has been executed.");
     private final StringBuilder wirelessHistory = new StringBuilder("Wireless ADB has not been changed.");
+    private final StringBuilder healthHistory = new StringBuilder("Tap Run health report to inspect memory, storage and running processes.");
+    private final StringBuilder certificateHistory = new StringBuilder("Choose an HTTPS test. No certificate checks will be disabled.");
     private EditText chatInput;
 
     @Override public void onCreate(Bundle savedInstanceState) {
@@ -119,14 +121,17 @@ public final class MainActivity extends Activity {
         add(root, text("GHOSTGPT  •  KITKAT 4.4", 22));
         LinearLayout navigation = new LinearLayout(this);
         navigation.setOrientation(LinearLayout.HORIZONTAL);
-        for (final String name: new String[]{"Chat", "Browser", "Debug", "Root", "Wireless"}) {
+        for (final String name: new String[]{"Chat", "Browser", "Debug", "Root", "Wireless", "Health", "Certs", "Backup"}) {
             Button tab = button(name, new Runnable() {
                 @Override public void run() { active = name; render(); }
             });
-            LinearLayout.LayoutParams weight = new LinearLayout.LayoutParams(0, px(56), 1);
-            navigation.addView(tab, weight);
+            LinearLayout.LayoutParams width = new LinearLayout.LayoutParams(px(96), px(56));
+            navigation.addView(tab, width);
         }
-        add(root, navigation);
+        android.widget.HorizontalScrollView navigationScroll = new android.widget.HorizontalScrollView(this);
+        navigationScroll.setHorizontalScrollBarEnabled(false);
+        navigationScroll.addView(navigation);
+        add(root, navigationScroll);
         ScrollView screen = new ScrollView(this);
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
@@ -138,6 +143,9 @@ public final class MainActivity extends Activity {
         if ("Debug".equals(active)) buildDebug(page);
         if ("Root".equals(active)) buildRoot(page);
         if ("Wireless".equals(active)) buildWireless(page);
+        if ("Health".equals(active)) buildHealth(page);
+        if ("Certs".equals(active)) buildCerts(page);
+        if ("Backup".equals(active)) buildBackup(page);
     }
 
     private void buildChat(final LinearLayout page) {
@@ -348,6 +356,100 @@ public final class MainActivity extends Activity {
             }
         }));
         add(page, text("Root commands can erase data or damage old firmware. Never run unreviewed commands. AI responses do not invoke root.", 13));
+    }
+
+    private void buildHealth(final LinearLayout page) {
+        add(page, text("Health, storage and performance (read-only)", 20));
+        add(page, text("This report inspects memory, free disk space, uptime and available process information. It will not delete files or stop apps.", 13));
+        final TextView result = text(healthHistory.toString(), 13);
+        add(page,result);
+        add(page,button("Run health report",new Runnable() {
+            @Override public void run() {
+                result.setText("Collecting device health...");
+                worker.execute(new Runnable(){
+                    @Override public void run(){
+                        final String value=DeviceDiagnostics.health(MainActivity.this);
+                        ui.post(new Runnable(){@Override public void run(){
+                            healthHistory.setLength(0);healthHistory.append(value);result.setText(value);
+                        }});
+                    }
+                });
+            }
+        }));
+        add(page,button("Share health report",new Runnable() {
+            @Override public void run(){sharePlainText("GhostGPT tablet health report",healthHistory.toString());}
+        }));
+        add(page,button("Open Manage applications",new Runnable() {
+            @Override public void run(){openSettings(Settings.ACTION_APPLICATION_SETTINGS);}
+        }));
+        add(page,button("Open Storage settings",new Runnable() {
+            @Override public void run(){openSettings(Settings.ACTION_INTERNAL_STORAGE_SETTINGS);}
+        }));
+        add(page,text("Performance: uninstall only apps you recognize and no longer need. Clear an app's cache in Settings if it causes problems. Never delete /system, /data or unknown root files.",13));
+    }
+
+    private void buildCerts(final LinearLayout page) {
+        add(page,text("HTTPS certificate troubleshooting",20));
+        add(page,text("Chrome 81 uses the old Android trust store. Android 4.4 does not include newer root CAs such as ISRG Root X1 by default. Test the system clock and certificate validation; never disable TLS security.",13));
+        final TextView result=text(certificateHistory.toString(),13);
+        add(page,result);
+        for(final String hostname:new String[]{"valid-isrgrootx1.letsencrypt.org","www.google.com","letsencrypt.org"}){
+            add(page,button("Test HTTPS: "+hostname,new Runnable(){
+                @Override public void run(){
+                    result.setText("Checking HTTPS certificate...");
+                    worker.execute(new Runnable(){
+                        @Override public void run(){
+                            final String outcome=DeviceDiagnostics.tls(MainActivity.this,hostname);
+                            ui.post(new Runnable(){@Override public void run(){
+                                certificateHistory.setLength(0);certificateHistory.append(outcome);result.setText(outcome);
+                            }});
+                        }
+                    });
+                }
+            }));
+        }
+        add(page,button("Share certificate report",new Runnable(){
+            @Override public void run(){sharePlainText("GhostGPT HTTPS diagnostics",certificateHistory.toString());}
+        }));
+        add(page,button("Open Date and time settings",new Runnable(){
+            @Override public void run(){openSettings(Settings.ACTION_DATE_SETTINGS);}
+        }));
+        add(page,button("Open certificate / Security settings",new Runnable(){
+            @Override public void run(){openSettings(Settings.ACTION_SECURITY_SETTINGS);}
+        }));
+        add(page,text("For a missing Let's Encrypt ISRG Root X1, use the official source at https://letsencrypt.org/certs/isrgrootx1.pem and verify authenticity. Install certificates only if you trust the issuer; user-added roots broaden what the tablet trusts.",13));
+    }
+
+    private void buildBackup(final LinearLayout page) {
+        add(page,text("Backup and recovery readiness",20));
+        add(page,text("Before changing rooted files or firmware: check model/build, back up personal files, and obtain the exact matching stock firmware. This tab does NOT flash, wipe, image partitions, or copy private app data automatically.",13));
+        add(page,button("Share system / backup checklist",new Runnable(){
+            @Override public void run(){
+                final String value=DeviceDiagnostics.health(MainActivity.this)
+                    + "\nBACKUP CHECKLIST\n"
+                    + "1. Charge the tablet and confirm the exact model + firmware build.\n"
+                    + "2. Copy photos, downloads, documents and other personal files to a trusted computer.\n"
+                    + "3. If authorized ADB works on MSI, use: adb -s TABLET_SERIAL pull /sdcard/ YOUR_BACKUP_FOLDER\n"
+                    + "4. Record installed packages: adb -s TABLET_SERIAL shell pm list packages -3\n"
+                    + "5. Find firmware only for the exact hardware revision; do not flash unknown images.\n"
+                    + "6. Verify backup files can be opened before modifying the tablet.\n"
+                    + "No root partition reads or writes have been performed.\n";
+                sharePlainText("GhostGPT backup checklist",value);
+            }
+        }));
+        add(page,button("Open Storage settings",new Runnable(){
+            @Override public void run(){openSettings(Settings.ACTION_INTERNAL_STORAGE_SETTINGS);}
+        }));
+        add(page,text("If you later authorize the MSI via ADB, it can copy user-accessible files and a package inventory. A complete firmware image requires a device-specific recovery procedure and sufficient external storage.",13));
+    }
+
+    private void sharePlainText(String subject,String content) {
+        Intent message=new Intent(Intent.ACTION_SEND);
+        message.setType("text/plain");
+        message.putExtra(Intent.EXTRA_SUBJECT,subject);
+        message.putExtra(Intent.EXTRA_TEXT,content);
+        try {startActivity(Intent.createChooser(message,"Share diagnostic report"));}
+        catch(Exception error){notice("No sharing app available; report remains visible on screen.");}
     }
 
     private void buildWireless(final LinearLayout page) {
