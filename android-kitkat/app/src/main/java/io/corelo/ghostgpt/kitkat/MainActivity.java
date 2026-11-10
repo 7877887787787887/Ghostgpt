@@ -1,0 +1,676 @@
+package io.corelo.ghostgpt.kitkat;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.Intent;
+import android.graphics.Color;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.Settings;
+import android.text.InputType;
+import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
+import android.widget.CheckBox;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.URL;
+import java.util.Collections;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import javax.net.ssl.HttpsURLConnection;
+
+/**
+ * GhostGPT Lite for Android 4.4 (API 19).
+ * Root commands require an explicit local confirmation; AI replies never execute commands.
+ * All HTTPS requests use platform certificate validation. No secret is persisted on KitKat.
+ */
+public final class MainActivity extends Activity {
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private LinearLayout root;
+    private String active = "Chat";
+    private String endpoint = "https://msi.tail28f016.ts.net/model";
+    private String model = "qwen/qwen3-8b";
+    private String token = ""; // In-memory only: Android 4.4 has no Keystore AES-GCM support.
+    private final StringBuilder chatHistory = new StringBuilder("GhostGPT KitKat — Android 4.4.4 compatibility build.");
+    private final StringBuilder debugHistory = new StringBuilder("Tap Check tablet to inspect configuration.");
+    private final StringBuilder rootHistory = new StringBuilder("No privileged command has been executed.");
+    private final StringBuilder wirelessHistory = new StringBuilder("Wireless ADB has not been changed.");
+    private final StringBuilder healthHistory = new StringBuilder("Tap Run health report to inspect memory, storage and running processes.");
+    private final StringBuilder certificateHistory = new StringBuilder("Choose an HTTPS test. No certificate checks will be disabled.");
+    private EditText chatInput;
+
+    @Override public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        render();
+    }
+
+    private int px(int dp) {
+        return (int) (dp * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private TextView text(String message, int size) {
+        TextView view = new TextView(this);
+        view.setText(message);
+        view.setTextColor(Color.rgb(235, 241, 255));
+        view.setTextSize(size);
+        view.setPadding(px(8), px(9), px(8), px(9));
+        view.setTextIsSelectable(true);
+        return view;
+    }
+
+    private Button button(String caption, final Runnable work) {
+        Button control = new Button(this);
+        control.setText(caption);
+        control.setTextColor(Color.WHITE);
+        control.setTextSize(14);
+        control.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View clicked) { work.run(); }
+        });
+        return control;
+    }
+
+    private EditText input(String hint, String initial) {
+        EditText control = new EditText(this);
+        control.setHint(hint);
+        control.setText(initial);
+        control.setTextColor(Color.WHITE);
+        control.setHintTextColor(Color.LTGRAY);
+        control.setSingleLine(false);
+        return control;
+    }
+
+    private void add(LinearLayout parent, View item) {
+        parent.addView(item, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    private void render() {
+        root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Color.rgb(18, 24, 40));
+        setContentView(root);
+        add(root, text("GHOSTGPT  •  KITKAT 4.4", 22));
+        LinearLayout navigation = new LinearLayout(this);
+        navigation.setOrientation(LinearLayout.HORIZONTAL);
+        for (final String name: new String[]{"Chat", "Browser", "Debug", "Root", "Wireless", "Health", "Certs", "Backup"}) {
+            Button tab = button(name, new Runnable() {
+                @Override public void run() { active = name; render(); }
+            });
+            LinearLayout.LayoutParams width = new LinearLayout.LayoutParams(px(96), px(56));
+            navigation.addView(tab, width);
+        }
+        android.widget.HorizontalScrollView navigationScroll = new android.widget.HorizontalScrollView(this);
+        navigationScroll.setHorizontalScrollBarEnabled(false);
+        navigationScroll.addView(navigation);
+        add(root, navigationScroll);
+        ScrollView screen = new ScrollView(this);
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(px(10), px(6), px(10), px(10));
+        screen.addView(page);
+        root.addView(screen, new LinearLayout.LayoutParams(-1, 0, 1));
+        if ("Chat".equals(active)) buildChat(page);
+        if ("Browser".equals(active)) buildBrowser(page);
+        if ("Debug".equals(active)) buildDebug(page);
+        if ("Root".equals(active)) buildRoot(page);
+        if ("Wireless".equals(active)) buildWireless(page);
+        if ("Health".equals(active)) buildHealth(page);
+        if ("Certs".equals(active)) buildCerts(page);
+        if ("Backup".equals(active)) buildBackup(page);
+    }
+
+    private void buildChat(final LinearLayout page) {
+        add(page, text("Private model chat", 20));
+        add(page, text("This older Android version may not trust modern TLS servers. HTTPS and valid certificates are required; no insecure TLS fallback is included.", 13));
+        final EditText url = input("HTTPS model gateway", endpoint);
+        final EditText id = input("Model ID", model);
+        final EditText auth = input("Bearer token — session only, never saved", token);
+        auth.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        auth.setSingleLine(true);
+        add(page, url);
+        add(page, id);
+        add(page, auth);
+        add(page, button("Apply connection for this session", new Runnable() {
+            @Override public void run() {
+                String chosen = url.getText().toString().trim();
+                if (!validHttps(chosen)) {
+                    notice("Use an HTTPS URL without user info, query, or fragment.");
+                    return;
+                }
+                endpoint = chosen;
+                model = id.getText().toString().trim();
+                token = auth.getText().toString();
+                notice("Session settings applied; bearer token is not stored on disk.");
+            }
+        }));
+        add(page, button("Clear bearer token", new Runnable() {
+            @Override public void run() {
+                token = "";
+                auth.setText("");
+                notice("In-memory token cleared.");
+            }
+        }));
+        final TextView output = text(chatHistory.toString(), 13);
+        add(page, output);
+        chatInput = input("Message GhostGPT", "");
+        add(page, chatInput);
+        add(page, button("Send message", new Runnable() {
+            @Override public void run() {
+                final String question = chatInput.getText().toString().trim();
+                if (question.length() == 0) return;
+                if (token.length() == 0) { notice("Enter an authenticated gateway token first."); return; }
+                chatInput.setText("");
+                chatHistory.append("\n\nYou: ").append(question).append("\nGhostGPT: Checking secure connection…");
+                output.setText(chatHistory.toString());
+                worker.execute(new Runnable() {
+                    @Override public void run() {
+                        String response;
+                        try { response = chat(question); }
+                        catch (Exception error) { response = "Connection unavailable: " + error.getMessage(); }
+                        final String reply = response;
+                        ui.post(new Runnable() {
+                            @Override public void run() {
+                                int spot = chatHistory.lastIndexOf("Checking secure connection…");
+                                if (spot >= 0) chatHistory.replace(spot, spot + "Checking secure connection…".length(), reply);
+                                if (chatHistory.length() > 14000) chatHistory.delete(0, chatHistory.length() - 14000);
+                                output.setText(chatHistory.toString());
+                            }
+                        });
+                    }
+                });
+            }
+        }));
+    }
+
+    private String chat(String prompt) throws Exception {
+        String address = endpoint;
+        if (!validHttps(address)) throw new Exception("Invalid HTTPS endpoint.");
+        while (address.endsWith("/")) address = address.substring(0, address.length() - 1);
+        if (!address.endsWith("/v1/chat/completions")) address += "/v1/chat/completions";
+        JSONObject data = new JSONObject();
+        data.put("model", model);
+        data.put("stream", false);
+        data.put("max_tokens", 256);
+        JSONArray messages = new JSONArray();
+        messages.put(new JSONObject().put("role", "user").put("content", prompt));
+        data.put("messages", messages);
+        HttpsURLConnection connection = (HttpsURLConnection) new URL(address).openConnection();
+        connection.setConnectTimeout(12000);
+        connection.setReadTimeout(40000);
+        connection.setInstanceFollowRedirects(false);
+        connection.setRequestMethod("POST");
+        connection.setDoOutput(true);
+        connection.setRequestProperty("Content-Type", "application/json");
+        connection.setRequestProperty("Authorization", "Bearer " + token);
+        try {
+            byte[] payload = data.toString().getBytes("UTF-8");
+            connection.setFixedLengthStreamingMode(payload.length);
+            OutputStream output = connection.getOutputStream();
+            try { output.write(payload); } finally { output.close(); }
+            int code = connection.getResponseCode();
+            if (code < 200 || code >= 300)
+                throw new Exception("Gateway returned HTTP " + code + ". Check token and KitKat TLS support.");
+            InputStream stream = connection.getInputStream();
+            try {
+                byte[] bytes = readUpTo(stream, 1024 * 1024);
+                JSONObject result = new JSONObject(new String(bytes, "UTF-8"));
+                return result.getJSONArray("choices").getJSONObject(0)
+                    .getJSONObject("message").getString("content");
+            } finally { stream.close(); }
+        } finally { connection.disconnect(); }
+    }
+
+    private static byte[] readUpTo(InputStream input, int limit) throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] chunk = new byte[4096];
+        int len;
+        while ((len = input.read(chunk)) >= 0) {
+            if (output.size() + len > limit) throw new Exception("Response exceeds size limit.");
+            output.write(chunk, 0, len);
+        }
+        return output.toByteArray();
+    }
+
+    private void buildBrowser(LinearLayout page) {
+        add(page, text("Open browser", 20));
+        add(page, text("Uses an installed Chrome or other browser. Android 4.4.4 and Chrome 81 are obsolete: avoid passwords, banking, and sensitive websites.", 13));
+        final EditText address = input("HTTPS address", "https://example.com");
+        add(page, address);
+        add(page, button("Open HTTPS website", new Runnable() {
+            @Override public void run() {
+                String destination = address.getText().toString().trim();
+                if (!validHttps(destination)) { notice("Only HTTPS links are accepted."); return; }
+                try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(destination))); }
+                catch (Exception error) { notice("No compatible browser installed."); }
+            }
+        }));
+    }
+
+    private void buildDebug(final LinearLayout page) {
+        add(page, text("Developer and wireless debugging", 20));
+        add(page, text("Android 4.4 does not have Android 11+ wireless pairing. Only an authorized ADB host can enable legacy TCP debugging. Do not expose ADB port 5555 on public or untrusted networks.", 13));
+        final TextView result = text(debugHistory.toString(), 13);
+        add(page, result);
+        add(page, button("Check tablet status (read-only)", new Runnable() {
+            @Override public void run() {
+                debugHistory.setLength(0);
+                debugHistory.append("Model: ").append(Build.MODEL).append("\n");
+                debugHistory.append("Manufacturer: ").append(Build.MANUFACTURER).append("\n");
+                debugHistory.append("Android: ").append(Build.VERSION.RELEASE).append(" (API ")
+                    .append(Build.VERSION.SDK_INT).append(")\n");
+                debugHistory.append("CPU: ").append(Build.CPU_ABI).append("\n");
+                debugHistory.append("Build: ").append(Build.DISPLAY).append("\n");
+                debugHistory.append("Debuggable: ").append(command("getprop", "ro.debuggable")).append("\n");
+                debugHistory.append("ADB TCP port: ").append(command("getprop", "service.adb.tcp.port")).append("\n");
+                try {
+                    int adb = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, -1);
+                    debugHistory.append("ADB enabled: ").append(adb).append("\n");
+                } catch (Exception error) { debugHistory.append("ADB flag unavailable\n"); }
+                debugHistory.append("IP:\n").append(addresses());
+                result.setText(debugHistory.toString());
+            }
+        }));
+        add(page, button("Open Android Developer options", new Runnable() {
+            @Override public void run() { openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS); }
+        }));
+        add(page, button("Open Wi-Fi settings", new Runnable() {
+            @Override public void run() { openSettings(Settings.ACTION_WIFI_SETTINGS); }
+        }));
+        add(page, button("Open system Settings", new Runnable() {
+            @Override public void run() { openSettings(Settings.ACTION_SETTINGS); }
+        }));
+        add(page, button("Open Security / Unknown sources", new Runnable() {
+            @Override public void run() { openSettings(Settings.ACTION_SECURITY_SETTINGS); }
+        }));
+        final String instructions = "After approving USB debugging on the tablet, from a trusted PC:\n"
+            + "adb devices -l\n"
+            + "adb tcpip 5555\n"
+            + "adb connect TABLET_PRIVATE_IP:5555\n"
+            + "adb shell getprop ro.build.version.sdk\n"
+            + "Close TCP debugging after testing. Only use a trusted isolated network.";
+        add(page, text(instructions, 13));
+        add(page, button("Copy authorized ADB instructions", new Runnable() {
+            @Override public void run() {
+                ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (clipboard != null) {
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Legacy ADB", instructions));
+                    notice("Copied. These commands run on your authorized computer, not on the tablet.");
+                }
+            }
+        }));
+    }
+
+    private void buildRoot(final LinearLayout page) {
+        add(page, text("Root tools — existing su access", 20));
+        add(page, text("This APK cannot jailbreak/root the tablet. 'su' works only if a root solution is already installed and the tablet grants permission. Every command requires approval.", 13));
+        final TextView result = text(rootHistory.toString(), 13);
+        add(page, result);
+        add(page, button("Check root UID", new Runnable() {
+            @Override public void run() { confirmRoot("id -u", result, false); }
+        }));
+        for (final String diagnostic: new String[]{"id", "getenforce", "df -h", "getprop ro.build.version.release", "getprop ro.build.display.id", "mount", "cat /proc/meminfo", "getprop service.adb.tcp.port"}) {
+            add(page, button("Read-only: " + diagnostic, new Runnable() {
+                @Override public void run() { confirmRoot(diagnostic, result, false); }
+            }));
+        }
+        add(page, button("Open my installed root manager (SuperSU or compatible)", new Runnable() {
+            @Override public void run() { openRootManager(); }
+        }));
+        add(page, text("Your own root-permission app must grant GhostGPT access to su. If 'su' is missing or denied, these commands cannot become root by themselves.", 13));
+        final EditText manual = input("Advanced manual root command (1–500 chars)", "");
+        add(page, manual);
+        add(page, button("Review manual root command", new Runnable() {
+            @Override public void run() {
+                String value = manual.getText().toString().trim();
+                if (value.length() == 0 || value.length() > 500) { notice("Enter 1–500 characters."); return; }
+                confirmRoot(value, result, true);
+            }
+        }));
+        add(page, text("Root commands can erase data or damage old firmware. Never run unreviewed commands. AI responses do not invoke root.", 13));
+    }
+
+    private void buildHealth(final LinearLayout page) {
+        add(page, text("Health, storage and performance (read-only)", 20));
+        add(page, text("This report inspects memory, free disk space, uptime and available process information. It will not delete files or stop apps.", 13));
+        final TextView result = text(healthHistory.toString(), 13);
+        add(page,result);
+        add(page,button("Run health report",new Runnable() {
+            @Override public void run() {
+                result.setText("Collecting device health...");
+                worker.execute(new Runnable(){
+                    @Override public void run(){
+                        final String value=DeviceDiagnostics.health(MainActivity.this);
+                        ui.post(new Runnable(){@Override public void run(){
+                            healthHistory.setLength(0);healthHistory.append(value);result.setText(value);
+                        }});
+                    }
+                });
+            }
+        }));
+        add(page,button("Share health report",new Runnable() {
+            @Override public void run(){sharePlainText("GhostGPT tablet health report",healthHistory.toString());}
+        }));
+        add(page,button("Open Manage applications",new Runnable() {
+            @Override public void run(){openSettings(Settings.ACTION_APPLICATION_SETTINGS);}
+        }));
+        add(page,button("Open Storage settings",new Runnable() {
+            @Override public void run(){openSettings(Settings.ACTION_INTERNAL_STORAGE_SETTINGS);}
+        }));
+        add(page,text("Performance: uninstall only apps you recognize and no longer need. Clear an app's cache in Settings if it causes problems. Never delete /system, /data or unknown root files.",13));
+    }
+
+    private void buildCerts(final LinearLayout page) {
+        add(page,text("HTTPS certificate troubleshooting",20));
+        add(page,text("Chrome 81 uses the old Android trust store. Android 4.4 does not include newer root CAs such as ISRG Root X1 by default. Test the system clock and certificate validation; never disable TLS security.",13));
+        final TextView result=text(certificateHistory.toString(),13);
+        add(page,result);
+        for(final String hostname:new String[]{"valid-isrgrootx1.letsencrypt.org","www.google.com","letsencrypt.org"}){
+            add(page,button("Test HTTPS: "+hostname,new Runnable(){
+                @Override public void run(){
+                    result.setText("Checking HTTPS certificate...");
+                    worker.execute(new Runnable(){
+                        @Override public void run(){
+                            final String outcome=DeviceDiagnostics.tls(MainActivity.this,hostname);
+                            ui.post(new Runnable(){@Override public void run(){
+                                certificateHistory.setLength(0);certificateHistory.append(outcome);result.setText(outcome);
+                            }});
+                        }
+                    });
+                }
+            }));
+        }
+        add(page,button("Share certificate report",new Runnable(){
+            @Override public void run(){sharePlainText("GhostGPT HTTPS diagnostics",certificateHistory.toString());}
+        }));
+        add(page,button("Open Date and time settings",new Runnable(){
+            @Override public void run(){openSettings(Settings.ACTION_DATE_SETTINGS);}
+        }));
+        add(page,button("Open certificate / Security settings",new Runnable(){
+            @Override public void run(){openSettings(Settings.ACTION_SECURITY_SETTINGS);}
+        }));
+        add(page,text("For a missing Let's Encrypt ISRG Root X1, use the official source at https://letsencrypt.org/certs/isrgrootx1.pem and verify authenticity. Install certificates only if you trust the issuer; user-added roots broaden what the tablet trusts.",13));
+    }
+
+    private void buildBackup(final LinearLayout page) {
+        add(page,text("Backup and recovery readiness",20));
+        add(page,text("Before changing rooted files or firmware: check model/build, back up personal files, and obtain the exact matching stock firmware. This tab does NOT flash, wipe, image partitions, or copy private app data automatically.",13));
+        add(page,button("Share system / backup checklist",new Runnable(){
+            @Override public void run(){
+                final String value=DeviceDiagnostics.health(MainActivity.this)
+                    + "\nBACKUP CHECKLIST\n"
+                    + "1. Charge the tablet and confirm the exact model + firmware build.\n"
+                    + "2. Copy photos, downloads, documents and other personal files to a trusted computer.\n"
+                    + "3. If authorized ADB works on MSI, use: adb -s TABLET_SERIAL pull /sdcard/ YOUR_BACKUP_FOLDER\n"
+                    + "4. Record installed packages: adb -s TABLET_SERIAL shell pm list packages -3\n"
+                    + "5. Find firmware only for the exact hardware revision; do not flash unknown images.\n"
+                    + "6. Verify backup files can be opened before modifying the tablet.\n"
+                    + "No root partition reads or writes have been performed.\n";
+                sharePlainText("GhostGPT backup checklist",value);
+            }
+        }));
+        add(page,button("Open Storage settings",new Runnable(){
+            @Override public void run(){openSettings(Settings.ACTION_INTERNAL_STORAGE_SETTINGS);}
+        }));
+        add(page,text("If you later authorize the MSI via ADB, it can copy user-accessible files and a package inventory. A complete firmware image requires a device-specific recovery procedure and sufficient external storage.",13));
+    }
+
+    private void sharePlainText(String subject,String content) {
+        Intent message=new Intent(Intent.ACTION_SEND);
+        message.setType("text/plain");
+        message.putExtra(Intent.EXTRA_SUBJECT,subject);
+        message.putExtra(Intent.EXTRA_TEXT,content);
+        try {startActivity(Intent.createChooser(message,"Share diagnostic report"));}
+        catch(Exception error){notice("No sharing app available; report remains visible on screen.");}
+    }
+
+    private void buildWireless(final LinearLayout page) {
+        add(page, text("Wireless debugging / ADB TCP", 20));
+        add(page, text("Android 4.4 has no Android 11+ wireless pairing. This device's legacy ADB TCP service may accept remote debugging from your local network. Only enable it on trusted, isolated Wi-Fi; disable it when finished.", 13));
+        final TextView current = text(wirelessHistory.toString(), 13);
+        add(page, current);
+        add(page, button("Check ADB service and private network", new Runnable() {
+            @Override public void run() {
+                worker.execute(new Runnable() {
+                    @Override public void run() {
+                        final String value = RootController.status()
+                            + "\nWi-Fi connected: " + (isOnWifi() ? "yes" : "no")
+                            + "\nIP address:\n" + addresses();
+                        ui.post(new Runnable() {
+                            @Override public void run() {
+                                wirelessHistory.setLength(0);
+                                wirelessHistory.append(value);
+                                current.setText(wirelessHistory.toString());
+                            }
+                        });
+                    }
+                });
+            }
+        }));
+        // The confirmation dialog itself records the user's informed approval.
+        // Keep one unambiguous confirmation step instead of a checkbox that can
+        // disappear off screen on smaller Android 4.4 tablet displays.
+        add(page, text("To enable ADB, tap the button below and confirm that this is your trusted, isolated private Wi-Fi. Your root manager must also grant GhostGPT su access.", 13));
+        add(page, button("Enable wireless debugging (requires ROOT)", new Runnable() {
+            @Override public void run() {
+                if (!isOnWifi() || !hasPrivateWifiAddress()) {
+                    String detail = "Private Wi-Fi not detected. No ADB changes made.\n"
+                        + "Wi-Fi connected: " + (isOnWifi() ? "yes" : "no") + "\n"
+                        + "IP addresses:\n" + addresses()
+                        + "\nConnect to your own home Wi-Fi, then tap Check ADB service and private network.";
+                    wirelessHistory.setLength(0);
+                    wirelessHistory.append(detail);
+                    current.setText(detail);
+                    return;
+                }
+                confirmWireless(true, current);
+            }
+        }));
+        add(page, button("Disable wireless debugging (ROOT)", new Runnable() {
+            @Override public void run() { confirmWireless(false, current); }
+        }));
+        add(page, button("Open Developer options", new Runnable() {
+            @Override public void run() { openSettings(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS); }
+        }));
+        add(page, text("If the root app cannot grant SU access, connect an authorized computer by a data-capable USB cable. Approve USB debugging on the tablet, then run 'adb tcpip 5555' on the computer. This does not bypass Android authorization.", 13));
+        add(page, text("Wireless ADB does not survive reboot. It is not a secure encrypted tunnel; never forward TCP 5555 to the internet. The AI chat cannot trigger these controls.", 13));
+    }
+
+    private void confirmWireless(final boolean enable, final TextView output) {
+        new AlertDialog.Builder(this)
+            .setTitle(enable ? "Expose ADB on port 5555?" : "Disable network debugging?")
+            .setMessage(enable
+                ? "I confirm that I am on my own trusted, isolated private Wi-Fi and accept the risk of exposing Android 4.4 ADB on TCP port 5555. This will restart adbd and requires your existing root manager to grant UID 0. Turn debugging off as soon as you finish."
+                : "This will restart adbd in USB mode and disconnect wireless debugging. Requires existing root access.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton(enable ? "Enable ADB TCP" : "Disable ADB TCP",
+                new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface dialog, int which) {
+                        if (enable && (!isOnWifi() || !hasPrivateWifiAddress())) {
+                            String detail = "Private Wi-Fi not detected. Wireless ADB remains unchanged.\nWi-Fi connected: "
+                                + (isOnWifi() ? "yes" : "no") + "\nIP addresses:\n" + addresses();
+                            wirelessHistory.setLength(0);
+                            wirelessHistory.append(detail);
+                            output.setText(detail);
+                            return;
+                        }
+                        output.setText("Checking su permission and ADB state...");
+                        worker.execute(new Runnable() {
+                            @Override public void run() {
+                                final String result = RootController.setWirelessAdb(enable);
+                                ui.post(new Runnable() {
+                                    @Override public void run() {
+                                        wirelessHistory.setLength(0);
+                                        wirelessHistory.append(result);
+                                        output.setText(wirelessHistory.toString());
+                                    }
+                                });
+                            }
+                        });
+                    }
+                }).show();
+    }
+
+    private boolean isOnWifi() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            NetworkInfo info = cm == null ? null : cm.getActiveNetworkInfo();
+            return info != null && info.isConnected() && info.getType() == ConnectivityManager.TYPE_WIFI;
+        } catch (Exception error) { return false; }
+    }
+
+    private boolean hasPrivateWifiAddress() {
+        try {
+            for (NetworkInterface nic: Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (!nic.isUp() || nic.isLoopback()) continue;
+                String name = nic.getName().toLowerCase(java.util.Locale.US);
+                if (!name.startsWith("wlan") && !name.startsWith("wifi")) continue;
+                for (InetAddress ip: Collections.list(nic.getInetAddresses())) {
+                    if (!(ip instanceof Inet4Address)) continue;
+                    byte[] value = ip.getAddress();
+                    int first = value[0] & 255;
+                    int second = value[1] & 255;
+                    if (first == 10 || first == 192 && second == 168 ||
+                        first == 172 && second >= 16 && second <= 31) return true;
+                }
+            }
+        } catch (Exception ignored) { }
+        return false;
+    }
+
+    private void openRootManager() {
+        String[] managers = new String[]{
+            "eu.chainfire.supersu", "com.noshufou.android.su", "com.topjohnwu.magisk"
+        };
+        for (String name: managers) {
+            try {
+                Intent launch = getPackageManager().getLaunchIntentForPackage(name);
+                if (launch != null) { startActivity(launch); return; }
+            } catch (Exception ignored) { }
+        }
+        notice("No known root manager found. Open the app that grants root permissions manually.");
+    }
+
+    private void confirmRoot(final String command, final TextView result, final boolean risky) {
+        new AlertDialog.Builder(this)
+            .setTitle(risky ? "Run manual root command?" : "Run root diagnostic?")
+            .setMessage("The tablet will attempt to execute this command with su, after your confirmation:\n\n"
+                    + command + "\n\nThis requires an independently installed root manager.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton(risky ? "Approve elevated command" : "Check", new android.content.DialogInterface.OnClickListener() {
+                @Override public void onClick(android.content.DialogInterface dialog, int index) {
+                    worker.execute(new Runnable() {
+                        @Override public void run() {
+                            final String output = commandRoot(command);
+                            ui.post(new Runnable() {
+                                @Override public void run() {
+                                    rootHistory.append("\n$ ").append(command).append("\n").append(output).append("\n");
+                                    if (rootHistory.length() > 8000) rootHistory.delete(0, rootHistory.length() - 8000);
+                                    result.setText(rootHistory.toString());
+                                }
+                            });
+                        }
+                    });
+                }
+            }).show();
+    }
+
+    // Process.waitFor(timeout, TimeUnit) was added only in Android API 26.
+    private static boolean waitForOldAndroid(Process process, long timeoutMillis) throws InterruptedException {
+        long until = android.os.SystemClock.uptimeMillis() + timeoutMillis;
+        while (android.os.SystemClock.uptimeMillis() < until) {
+            try {
+                process.exitValue();
+                return true;
+            } catch (IllegalThreadStateException running) {
+                Thread.sleep(100);
+            }
+        }
+        try { process.exitValue(); return true; }
+        catch (IllegalThreadStateException running) { return false; }
+    }
+
+    private static String commandRoot(String value) {
+        RootController.Result result = RootController.run(value, 18000);
+        return result.describe()
+            + ("id -u".equals(value) && RootController.hasRoot(result)
+                ? "\nROOT CONFIRMED: GhostGPT was granted UID 0 by your existing root app." : "");
+    }
+
+    private static String command(String... value) {
+        Process process = null;
+        try {
+            process = new ProcessBuilder(value).redirectErrorStream(true).start();
+            if (!waitForOldAndroid(process, 2000)) { process.destroy(); return "Timed out"; }
+            if (process.exitValue() != 0) return "Unavailable";
+            InputStream stream = process.getInputStream();
+            try { return new String(readUpTo(stream, 256), "UTF-8").trim(); }
+            finally { stream.close(); }
+        } catch (Exception error) { return "Unavailable"; }
+        finally { if (process != null) process.destroy(); }
+    }
+
+    private static String addresses() {
+        StringBuilder output = new StringBuilder();
+        try {
+            for (NetworkInterface nic: Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (!nic.isUp() || nic.isLoopback()) continue;
+                for (InetAddress ip: Collections.list(nic.getInetAddresses())) {
+                    if (ip instanceof Inet4Address && !ip.isLoopbackAddress())
+                        output.append(nic.getName()).append(": ").append(ip.getHostAddress()).append("\n");
+                }
+            }
+        } catch (Exception error) { output.append("Network addresses unavailable"); }
+        return output.toString();
+    }
+
+    private static boolean validHttps(String raw) {
+        Uri uri = Uri.parse(raw);
+        return "https".equalsIgnoreCase(uri.getScheme()) &&
+            uri.getHost() != null && uri.getUserInfo() == null &&
+            uri.getQuery() == null && uri.getFragment() == null;
+    }
+
+    private void openSettings(String name) {
+        try { startActivity(new Intent(name)); }
+        catch (Exception error) { notice("Settings page unavailable on this firmware."); }
+    }
+
+    private void notice(String message) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+    }
+
+    @Override protected void onDestroy() {
+        worker.shutdownNow();
+        token = "";
+        super.onDestroy();
+    }
+}
