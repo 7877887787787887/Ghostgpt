@@ -6,8 +6,8 @@ android {
         applicationId 'io.corelo.ghostgpt.kitkat'
         minSdk 19
         targetSdk 28
-        versionCode 4
-        versionName '0.3.0-legacy'
+        versionCode 5
+        versionName '0.3.1-legacy'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
