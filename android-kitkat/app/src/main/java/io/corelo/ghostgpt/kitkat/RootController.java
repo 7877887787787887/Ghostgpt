@@ -5,6 +5,8 @@ import android.os.SystemClock;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 
 /**
  * Local, user-initiated root operations for Android API 19.
@@ -119,6 +121,46 @@ final class RootController {
         finally { if (proc != null) proc.destroy(); }
     }
 
+    private static boolean loopbackAdbListening() {
+        Socket socket = new Socket();
+        try {
+            socket.connect(new InetSocketAddress("127.0.0.1", 5555), 900);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        } finally {
+            try { socket.close(); } catch (IOException ignored) {}
+        }
+    }
+
+    static String diagnoseWireless() {
+        StringBuilder report = new StringBuilder();
+        report.append("ADB diagnosis — READ ONLY\n");
+        report.append(status()).append("\n");
+        report.append("persistent ADB TCP port: ")
+              .append(unprivilegedProperty("persist.adb.tcp.port")).append("\n");
+        report.append("localhost TCP 5555 listener: ")
+              .append(loopbackAdbListening() ? "OPEN" : "NOT OPEN").append("\n");
+        Result rootIdentity = run("id -u", 10000);
+        report.append("Root UID check: ").append(rootIdentity.describe()).append("\n");
+        if (hasRoot(rootIdentity)) {
+            Result proc = run("ps", 10000);
+            report.append("Process list:\n");
+            if (proc.success()) {
+                for (String line : proc.output.split("\\r?\\n")) {
+                    if (line.contains("adbd") || line.contains("USER") || line.contains("PID"))
+                        report.append(line).append("\n");
+                }
+            } else {
+                report.append(proc.describe()).append("\n");
+            }
+        }
+        report.append("\nIf ADB TCP port is 5555 and the adbd service reports 'running' ")
+              .append("but no local listener exists, the firmware did not actually bind the port. ")
+              .append("Do not assume that a zero exit code means it worked.\n");
+        return report.toString();
+    }
+
     /**
      * Changes only the local adbd transport. Calling code must obtain a fresh,
      * explicit approval and check for trusted private Wi-Fi before enabling.
@@ -132,8 +174,18 @@ final class RootController {
                 ? "setprop service.adb.tcp.port 5555; stop adbd; start adbd"
                 : "setprop service.adb.tcp.port -1; stop adbd; start adbd";
         Result result = run(action, 15000);
+        try { Thread.sleep(750); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        boolean listening = loopbackAdbListening();
+        String statusAfter = status();
+        String state = enable
+                ? (listening
+                    ? "\nLOCAL TCP 5555 LISTENER DETECTED. Remote network connection is not yet verified."
+                    : "\nWARNING: ADB port 5555 is NOT listening locally. Enabling wireless ADB did not complete.")
+                : (listening
+                    ? "\nWARNING: ADB port 5555 is still listening. Disable operation was not confirmed."
+                    : "\nTCP port 5555 is not listening locally.");
         return (enable ? "Enable legacy ADB/TCP:\n" : "Disable legacy ADB/TCP:\n")
-                + result.describe() + "\n" + status()
-                + (enable ? "\nImportant: disconnect from untrusted Wi-Fi and turn ADB off when finished." : "");
+                + result.describe() + "\n" + statusAfter + state
+                + (enable ? "\nImportant: use only trusted private Wi-Fi and turn ADB off when finished." : "");
     }
 }
