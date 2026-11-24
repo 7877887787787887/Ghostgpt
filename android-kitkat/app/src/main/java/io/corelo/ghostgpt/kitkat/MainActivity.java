@@ -479,6 +479,23 @@ public final class MainActivity extends Activity {
         // Keep one unambiguous confirmation step instead of a checkbox that can
         // disappear off screen on smaller Android 4.4 tablet displays.
         add(page, text("To enable ADB, tap the button below and confirm that this is your trusted, isolated private Wi-Fi. Your root manager must also grant GhostGPT su access.", 13));
+        add(page, button("Diagnose ADB port 5555 (read-only)", new Runnable() {
+            @Override public void run() {
+                current.setText("Checking on-device ADB service and TCP listener...");
+                worker.execute(new Runnable() {
+                    @Override public void run() {
+                        final String value = RootController.diagnoseWireless();
+                        ui.post(new Runnable() {
+                            @Override public void run() {
+                                wirelessHistory.setLength(0);
+                                wirelessHistory.append(value);
+                                current.setText(value);
+                            }
+                        });
+                    }
+                });
+            }
+        }));
         add(page, button("Enable wireless debugging (requires ROOT)", new Runnable() {
             @Override public void run() {
                 if (!isOnWifi() || !hasPrivateWifiAddress()) {
